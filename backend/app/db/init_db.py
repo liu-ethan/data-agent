@@ -7,6 +7,7 @@ import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from app.auth.passwords import hash_password
 from app.config import get_settings
 from app.db.database import get_connection
 from app.db.schema import apply_schema
@@ -254,7 +255,7 @@ def seed(conn: sqlite3.Connection) -> None:
         (
             1,
             "demo_analyst",
-            "phase2-placeholder",
+            hash_password("demo1234"),
             "analyst",
             datetime.now().isoformat(sep=" ", timespec="seconds"),
         ),
