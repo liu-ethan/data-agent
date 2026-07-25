@@ -27,6 +27,10 @@ APP_TABLES: frozenset[str] = frozenset(
     }
 )
 
+SENSITIVE_USER_COLUMNS: frozenset[str] = frozenset(
+    {"name", "phone", "email", "id_card"}
+)
+
 ALL_TABLES: frozenset[str] = BUSINESS_TABLES | APP_TABLES
 
 DDL_STATEMENTS: list[str] = [
