@@ -2,7 +2,7 @@
 
 [![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?style=flat&logo=langchain&logoColor=white)](https://github.com/langchain-ai/langgraph)
 [![LangChain](https://img.shields.io/badge/LangChain-1C3C3C?style=flat&logo=langchain&logoColor=white)](https://github.com/langchain-ai/langchain)
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![React](https://img.shields.io/badge/React-20232A?style=flat&logo=react&logoColor=61DAFB)](https://react.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
@@ -11,7 +11,11 @@
 
 基于 [LangGraph](https://github.com/langchain-ai/langgraph) 做状态图编排，基于 [LangChain](https://github.com/langchain-ai/langchain) 提供 LLM / Tools / Memory 抽象。用户用自然语言提问，系统经意图识别（封闭枚举 `intent` + 薄词表 `slots` + 建议 `route_mode`）、澄清与分流后，走 ReAct 或 Coordinator，再完成 Schema Linking、SQL 生成、权限校验、沙箱执行、错误修复，并以 SSE 流式输出表格、图表与分析结论。
 
-> **状态说明**：规格以 [`docs/`](./docs/需求文档.md) 为准（尤其 [`03-Agent设计`](./docs/03-Agent设计.md)）。按 [`06-开发计划`](./docs/06-开发计划.md) 分 Phase 实现；下列启动命令与功能为**目标形态**，若仓库尚无 `backend/` / `frontend/`，以当前代码为准。
+[![Agent 架构 · LangGraph 节点图](./docs/architecture-16x9.png)](./docs/architecture-16x9.html)
+
+> **状态说明**：规格以 [`docs/`](./docs/需求文档.md) 为准（尤其 [`03-Agent设计`](./docs/03-Agent设计.md)）。按 [`06-开发计划`](./docs/06-开发计划.md) 分 Phase 实现。  
+> **Phase 1 已落地**：`backend/` / `frontend/` 脚手架、`init_db`、不鉴权的 `GET /api/schema`、JSON 日志骨架。登录 / chat / Agent 等仍为目标形态（Phase 2+）。  
+> **Python**：强制使用 conda 环境 `python3.12`（见 [`AGENTS.md`](./AGENTS.md)），勿用系统 Python 或仓库内 `.venv`。
 
 ---
 
@@ -111,7 +115,7 @@ SQL 安全为确定性独立模块，不使用黑盒 SQL Agent。
 | 后端 | Python · FastAPI · Pydantic · JWT · SSE |
 | Agent | [LangGraph](https://github.com/langchain-ai/langgraph) · [LangChain](https://github.com/langchain-ai/langchain) |
 | 数据 | SQLite（8 张业务表 + 应用表） |
-| 模型 | OpenAI 兼容 API（`.env` 配置） |
+| 模型 | OpenAI 兼容 API（`config.yaml` 配置） |
 
 ---
 
@@ -128,40 +132,36 @@ SQL 安全为确定性独立模块，不使用黑盒 SQL Agent。
 
 ## 本地启动
 
-> 目标目录与命令如下；**模块未合入前无法启动**，请先按 `docs/06-开发计划.md` 实现 Phase 1+。
+> Phase 1 可启动后端与前端脚手架。注册登录 / 工作台提问为 Phase 2+ 目标形态。
 
-### 1. 环境变量
+### 1. 配置
 
-复制并填写（**不要提交真实密钥**）：
+复制模板并填写（**不要提交 `config.yaml`**）：
 
 ```bash
-cp backend/.env.example backend/.env
+cp config_template.yaml config.yaml
 ```
 
-```env
-OPENAI_API_KEY=
-OPENAI_BASE_URL=
-OPENAI_MODEL=
-JWT_SECRET=change-me
-ADMIN_INVITE_CODE=your-invite-code
-```
+主要字段：
 
-| 变量 | 说明 |
-|------|------|
-| `OPENAI_*` | 兼容 OpenAI 的模型服务 |
-| `JWT_SECRET` | 签发登录 Token |
-| `ADMIN_INVITE_CODE` | 注册 `admin` 时必填，与服务端校验 |
+| 段 | 说明 |
+|----|------|
+| `llm.*` | OpenAI 兼容模型（`api_key` / `base_url` / `model`） |
+| `backend.*` | 端口、`jwt_secret`、`admin_invite_code`、`database_path`、`cors_origins` |
+| `frontend.*` | 开发端口、`api_base_url` |
 
 ### 2. 后端
 
+使用 [`AGENTS.md`](./AGENTS.md) 指定的 conda `python3.12`：
+
 ```bash
 cd backend
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-python -m app.db.init_db    # 业务表 + 应用表 + 模拟数据
-uvicorn app.main:app --reload --port 8000
+/home/user/miniconda3/envs/python3.12/bin/pip install -r requirements.txt
+/home/user/miniconda3/envs/python3.12/bin/python -m app.db.init_db    # 业务表 + 应用表 + 模拟数据（会覆盖本地库）
+/home/user/miniconda3/envs/python3.12/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+端口与 CORS 以 `config.yaml` 的 `backend` 段为准。验收探针：`GET http://127.0.0.1:8000/api/schema`（Phase 1 **暂不鉴权**，仅返回 8 张业务表）。
 
 ### 3. 前端
 
@@ -171,12 +171,14 @@ npm install
 npm run dev
 ```
 
-浏览器打开前端地址（默认 `http://localhost:5173`）：
+Vite 会读取根目录 `config.yaml`（缺失时回退 `config_template.yaml`）中的 `frontend.port` / `api_base_url`。
+
+浏览器打开前端地址（默认 `http://localhost:5173`）。Phase 1 为 Vite 默认页；Phase 2 起：
 
 1. 在 `/` 注册：默认 `analyst`；选 `admin` 时填写邀请码  
 2. 登录后进入 `/app` 工作台提问  
 
-### 4. 示例问题
+### 4. 示例问题（Phase 2+）
 
 - 上个月 GMV 最高的 5 个渠道是什么？  
 - 最近 30 天每天的订单量和 GMV 趋势如何？  
