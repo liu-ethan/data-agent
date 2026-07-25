@@ -40,6 +40,9 @@ export default function AppWorkbench() {
   const [traceOpen, setTraceOpen] = useState(false)
   const [latencyMs, setLatencyMs] = useState<number | null>(null)
   const [guardrailPassed, setGuardrailPassed] = useState(false)
+  const [clarificationHint, setClarificationHint] = useState<string | null>(
+    null,
+  )
 
   const abortRef = useRef<AbortController | null>(null)
   const traceIdRef = useRef(0)
@@ -88,6 +91,7 @@ export default function AppWorkbench() {
     setTrace([])
     setLatencyMs(null)
     setGuardrailPassed(false)
+    setClarificationHint(null)
     traceIdRef.current = 0
   }
 
@@ -158,6 +162,12 @@ export default function AppWorkbench() {
               setAnswer(String(data.text ?? ''))
               pushTrace(event, '结论已生成')
               break
+            case 'route_decision':
+              pushTrace(
+                event,
+                `${String(data.route_mode ?? '')} · ${String(data.route_source ?? '')}`,
+              )
+              break
             case 'error':
               setError(String(data.message ?? '分析失败'))
               pushTrace(event, String(data.message ?? 'error'))
@@ -165,6 +175,10 @@ export default function AppWorkbench() {
             case 'done':
               if (typeof data.latency_ms === 'number') {
                 setLatencyMs(data.latency_ms)
+              }
+              if (data.need_clarification === true) {
+                setError(null)
+                setClarificationHint('需要补充信息后继续')
               }
               pushTrace(event, `完成 ${data.latency_ms ?? ''}ms`)
               break
@@ -291,6 +305,9 @@ export default function AppWorkbench() {
               <h2 className="text-xs font-medium uppercase tracking-wider text-muted">
                 回答
               </h2>
+              {clarificationHint && (
+                <p className="mt-2 text-xs text-muted">{clarificationHint}</p>
+              )}
               <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">
                 {answer}
               </p>

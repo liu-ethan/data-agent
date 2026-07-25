@@ -3,11 +3,28 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator
 
-from app.agent import answer_composer, sql_generator
-from app.agent.sql_executor import execute_sql
+from app.agent.graph import build_graph
 from app.agent.state import AgentState
-from app.api.schema import build_schema_tables
-from app.security.sql_guardrail import check_sql
+
+
+def _summarize(node: str, state: dict) -> str:
+    if state.get("error"):
+        return "rejected" if node == "SQLGuardrail" else "failed"
+    if node == "IntentAnalyzer":
+        return str(state.get("intent") or "unknown")
+    if node == "ClarificationChecker":
+        return "clarification_needed" if state.get("need_clarification") else "clear"
+    if node == "RouteEmit":
+        return str(state.get("route_mode") or "react")
+    if node == "SQLGuardrail":
+        return "passed"
+    return {
+        "ClarificationReply": "composed",
+        "SchemaRetriever": "retrieved",
+        "SQLGenerator": "sql_generated",
+        "SQLExecutor": "executed",
+        "AnswerComposer": "composed",
+    }.get(node, "completed")
 
 
 def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
@@ -15,79 +32,62 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
     yield (
         "run_start",
         {
-            "request_id": state.request_id,
-            "trace_id": state.trace_id,
-            "session_id": state.session_id,
+            "request_id": state["request_id"],
+            "trace_id": state["trace_id"],
+            "session_id": state["session_id"],
         },
     )
 
-    active_node: str | None = None
+    graph = build_graph()
+    merged: dict = dict(state)
     try:
-        active_node = "SQLGenerator"
-        yield ("node_start", {"node": active_node})
-        schema_tables = build_schema_tables(state.user_role)
-        state.generated_sql = sql_generator.generate_sql(
-            state.question, schema_tables, state.user_role
-        )
-        yield ("node_end", {"node": active_node, "summary": "sql_generated"})
-        active_node = None
-        yield ("sql", {"sql": state.generated_sql, "repaired": False})
-
-        active_node = "SQLGuardrail"
-        yield ("node_start", {"node": active_node})
-        guard = check_sql(state.generated_sql, user_role=state.user_role)
-        if not guard.ok:
-            state.error = guard.reason or "SQL blocked by guardrail"
-            yield ("node_end", {"node": active_node, "summary": "rejected"})
-            active_node = None
-            yield ("error", {"message": state.error})
-            state.latency_ms = int((time.monotonic() - started) * 1000)
-            yield (
-                "done",
-                {
-                    "latency_ms": state.latency_ms,
-                    "need_clarification": False,
-                    "clarification_question": None,
-                },
-            )
-            return
-        yield ("node_end", {"node": active_node, "summary": "passed"})
-        active_node = None
-
-        active_node = "SQLExecutor"
-        yield ("node_start", {"node": active_node})
-        state.columns, state.rows = execute_sql(
-            state.generated_sql, user_role=state.user_role
-        )
-        yield ("node_end", {"node": active_node, "summary": "executed"})
-        active_node = None
-        yield (
-            "rows",
-            {"columns": state.columns, "rows": state.rows},
-        )
-
-        active_node = "AnswerComposer"
-        yield ("node_start", {"node": active_node})
-        state.answer = answer_composer.compose_answer(
-            state.question, state.columns, state.rows
-        )
-        yield ("node_end", {"node": active_node, "summary": "composed"})
-        active_node = None
-        yield ("answer", {"text": state.answer})
-
+        for update in graph.stream(merged, stream_mode="updates"):
+            for node, delta in update.items():
+                yield ("node_start", {"node": node})
+                if isinstance(delta, dict):
+                    merged.update(delta)
+                yield (
+                    "node_end",
+                    {"node": node, "summary": _summarize(node, merged)},
+                )
+                if node == "RouteEmit":
+                    yield (
+                        "route_decision",
+                        {
+                            "route_mode": merged.get("route_mode"),
+                            "route_source": merged.get("route_source"),
+                        },
+                    )
+                if node == "SQLGenerator" and merged.get("generated_sql"):
+                    yield (
+                        "sql",
+                        {"sql": merged["generated_sql"], "repaired": False},
+                    )
+                if isinstance(delta, dict) and delta.get("error") is not None:
+                    yield ("error", {"message": merged["error"]})
+                if node == "SQLExecutor" and merged.get("rows") is not None:
+                    yield (
+                        "rows",
+                        {
+                            "columns": merged.get("columns") or [],
+                            "rows": merged.get("rows") or [],
+                        },
+                    )
+                if (
+                    node in ("AnswerComposer", "ClarificationReply")
+                    and merged.get("answer")
+                ):
+                    yield ("answer", {"text": merged["answer"]})
     except Exception as exc:
-        if active_node is not None:
-            yield ("node_end", {"node": active_node, "summary": "failed"})
-            active_node = None
-        state.error = str(exc)
-        yield ("error", {"message": state.error})
+        yield ("error", {"message": str(exc)})
 
-    state.latency_ms = int((time.monotonic() - started) * 1000)
+    latency = int((time.monotonic() - started) * 1000)
+    merged["latency_ms"] = latency
     yield (
         "done",
         {
-            "latency_ms": state.latency_ms,
-            "need_clarification": False,
-            "clarification_question": None,
+            "latency_ms": latency,
+            "need_clarification": bool(merged.get("need_clarification")),
+            "clarification_question": merged.get("clarification_question"),
         },
     )

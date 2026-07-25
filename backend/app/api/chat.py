@@ -38,14 +38,17 @@ def chat(
 ) -> StreamingResponse:
     request_id = get_request_id() or f"req_{uuid.uuid4().hex[:12]}"
     trace_id = request_id
-    state = AgentState(
-        question=body.question,
-        session_id=body.session_id,
-        user_id=user["id"],
-        user_role=user["role"],
-        request_id=request_id,
-        trace_id=trace_id,
-    )
+    state: AgentState = {
+        "question": body.question,
+        "session_id": body.session_id,
+        "user_id": user["id"],
+        "user_role": user["role"],
+        "request_id": request_id,
+        "trace_id": trace_id,
+        "need_clarification": False,
+        "repaired": False,
+        "agent_trace": [],
+    }
     return StreamingResponse(
         _iter_sse(state),
         media_type="text/event-stream",

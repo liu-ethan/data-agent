@@ -15,7 +15,13 @@ data-analysis-agent — 电商经营分析 Agent。按 `docs/06-开发计划.md`
 - **TDD 优先**：核心逻辑（Guardrail、权限、沙箱、鉴权、记忆槽位合并）先写失败测试，再写实现；修 bug 先补复现测试
 - **解耦**：编排（LangGraph 节点）/ Tool / 确定性安全模块 / 可观测（AuditLog）分层；节点不直连 DB 写权限逻辑，经 Guardrail + Tool Registry
 - **能确定就不调模型**：路由、权限、SQL 校验用代码；模型只负责理解、生成与解释
-- **小步提交**：按 Phase 交付；一次只改相关文件，禁止顺手大重构
+- **按 Phase 交付**：一次只改相关文件，禁止顺手大重构；做完一个 Phase 对照验收标准自检后告知用户，由用户提交
+
+## Git / 工作区（强制）
+
+- **只在本仓库 `main` 上改代码**；禁止用 git worktree / `.worktrees/` 做功能开发
+- **Agent 不执行 `git commit` / `git push`**（除非用户当次明确要求）；不要为 Task/小步单独提交
+- Phase 进行中把改动留在工作区即可；完成后汇报状态与建议 commit message，等用户自行提交
 
 ## Python / 配置（强制）
 

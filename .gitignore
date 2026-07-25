@@ -10,3 +10,4 @@ dist/
 backend/data/*.db
 *.db
 .worktrees/
+.superpowers/
