@@ -9,12 +9,12 @@
 
 面向电商经营分析的自然语言数据分析 Agent。
 
-基于 [LangGraph](https://github.com/langchain-ai/langgraph) 做状态图编排，基于 [LangChain](https://github.com/langchain-ai/langchain) 提供 LLM / Tools / Memory 抽象。用户用自然语言提问，**当前实现（Phase 1–4）** 为 LangGraph **单路径**：意图识别 → 澄清 → 分流（`RouteEmit`）→ Schema → SQL → Guardrail → **Tool Registry**（`validate_sql` / `execute_sql`）→ 作答；澄清命中则直接返回问句、**不跑 SQL**；SSE 含 `node_*` / `route_decision` / `tool_start` / `tool_end`（`route_source=model`）。ReAct / Coordinator 双模式子图为 **目标形态（Phase 5）**，见下文「主链路」。
+基于 [LangGraph](https://github.com/langchain-ai/langgraph) 做状态图编排，基于 [LangChain](https://github.com/langchain-ai/langchain) 提供 LLM / Tools / Memory 抽象。用户用自然语言提问，**Phase 1–5 已落地**：MemoryLoad → Intent → SlotMerge → Clarify → ComplexityRouter → ReAct（简单）或 Coordinator（复杂）→ 共享 SQL 安全尾环（Guardrail → Execute → Repair，最多 1 次）→ Answer → MemorySave。澄清命中则直接返回问句、**不跑 SQL**；SSE 含 `node_*` / `route_decision` / `tool_start` / `tool_end`。
 
 [![Agent 架构 · LangGraph 节点图](./docs/architecture-16x9.png)](./docs/architecture-16x9.html)
 
 > **状态说明**：规格以 [`docs/`](./docs/需求文档.md) 为准（尤其 [`03-Agent设计`](./docs/03-Agent设计.md)）。按 [`06-开发计划`](./docs/06-开发计划.md) 分 Phase 实现。  
-> **Phase 1–4 已落地**：脚手架与 `init_db`；JWT 注册/登录；鉴权后的 `GET /api/schema` / `examples`；`POST /api/chat` SSE；浅白营销登录页 `/` 与工作台 `/app`。Chat 主链路为 **LangGraph 单路径**（Intent → Clarification → RouteEmit → Schema → SQL → Guardrail → Tool Registry → Answer）；**SQL 执行唯一入口**为 Tool Registry（`validate_sql` / `execute_sql`）。**analyst** 只读 + 敏感列拦截；**admin** 受控 INSERT/UPDATE/DELETE；禁 DDL、多语句、访问全部应用表。**SQLSandboxExecutor**：analyst 用 `PRAGMA query_only`，admin 可写；明细 `LIMIT 100`，写操作影响行上限 100。**AuditLog** 写入 `logs/audit.jsonl`（脱敏），与 Prompt 分离。SSE 含 `node_*` / `route_decision` / `tool_start` / `tool_end`；分流看 `route_mode`（`intent` ≠ `route_mode`），本阶段 `route_source=model`。`render_chart` 已在 Registry 注册，主图**未**自动调用。ReAct / Coordinator、Repair 循环、图表 UI、Memory 读写为后续 Phase。模糊问题经澄清后直接返回问句，**不跑 SQL**。  
+> **Phase 1–5 已落地**：脚手架与 `init_db`；JWT 注册/登录；鉴权后的 `GET /api/schema` / `examples`；`POST /api/chat` SSE；浅白营销登录页 `/` 与工作台 `/app`；MemoryLoad / MemorySave；ComplexityRouter；ReAct / Coordinator 双模式；共享 Guardrail → Execute → Repair（最多 1 次）尾环。**SQL 执行唯一入口**为 Tool Registry（`validate_sql` / `execute_sql`）；ReAct 只调用分析工具并产出候选 SQL，**不直接调用 `execute_sql`**。**analyst** 只读 + 敏感列拦截；**admin** 受控 INSERT/UPDATE/DELETE；禁 DDL、多语句、访问全部应用表。**SQLSandboxExecutor**：analyst 用 `PRAGMA query_only`，admin 可写；明细 `LIMIT 100`，写操作影响行上限 100。**AuditLog** 写入 `logs/audit.jsonl`（脱敏），与 Prompt 分离。SSE 含 `node_*` / `route_decision` / `tool_start` / `tool_end`；分流看 `route_mode`（`intent` ≠ `route_mode`），`route_source` 为 `model` 或规则硬覆盖时的 `rule_override`。`render_chart` 已在 Registry 注册，图表 UI 仍属 Phase 6。模糊问题经澄清后直接返回问句，**不跑 SQL**。
 > **Python**：强制使用 conda 环境 `python3.12`（见 [`AGENTS.md`](./AGENTS.md)），勿用系统 Python 或仓库内 `.venv`。  
 > **安全**：默认可演示的 chat 路径上 SQL **必须**经 Guardrail；无「跳过校验直连 DB」的 Demo 分支。
 
@@ -49,36 +49,25 @@
 | 无账号体系 | JWT 登录；analyst / admin（邀请码） |
 | 无治理 | Tool Registry + AuditLog（与 Prompt 分离） |
 
-**当前实现（Phase 1–4）— LangGraph 单路径**
+**当前实现（Phase 1–5）— ReAct / Coordinator 双模式**
 
 ```text
-自然语言问题
-  → IntentAnalyzer（intent 枚举 + slots 薄词表 + 建议 route_mode）
-  → ClarificationChecker（需澄清则结束，不跑 SQL）
-  → RouteEmit（emit route_decision；本阶段 route_source=model）
-  → SchemaRetriever → SQLGenerator → SQLGuardrail → Tool Registry（validate_sql / execute_sql）→ AnswerComposer
+MemoryLoad → IntentAnalyzer → SlotMerge → ClarificationChecker
+  → ComplexityRouter（route_source=model | rule_override）
+  → ReAct（简单）| Coordinator（复杂）
+  → SQLGuardrail → SQLExecutor → SQLRepairer（最多 1 次，重新过 Guardrail）
+  → AnswerComposer → MemorySave
 ```
 
-- `intent` ≠ 执行路径；分流字段看 `route_mode`（SSE `route_decision`）。  
-- SSE 另含 `tool_start` / `tool_end`（Registry 调用轨迹）。Repair 循环、图表 UI、Memory 为后续 Phase；`render_chart` 已注册但主图未自动调用。
-
-**目标形态（Phase 5）— ReAct / Coordinator 双模式**
-
-```text
-  → Memory 读入（Session / 偏好 / 摘要）
-  → IntentAnalyzer → ClarificationChecker → ComplexityRouter（规则可覆盖 route_mode）
-  → ReAct（简单）或 Coordinator 子图（复杂；共用 Tool / Guardrail）
-  → Schema → SQL → 权限校验 → 沙箱 → 错误修复 → 图表 → 结论 → Memory 写回
-```
-
-- **简单（react）** → 单 Agent ReAct；**复杂（coordinator）** → Coordinator 子图  
-- ComplexityRouter 可硬覆盖（`route_source=rule_override`）
+- `intent` ≠ 执行路径；分流字段看 `route_mode`（SSE `route_decision`），来源看 `route_source`。
+- **简单（react）** → 单 Agent ReAct；**复杂（coordinator）** → SchemaRetriever → SQLGenerator。两者生成的 SQL 都进入共享安全尾环。
+- ReAct 不直接调用 `execute_sql`；Guardrail 拒绝时不修复，沙箱可修错误最多 Repair 1 次。图表 UI 仍为 Phase 6。
 
 ---
 
 ## 架构
 
-**当前（Phase 1–4）** — FastAPI + LangGraph 单路径（澄清短路；Guardrail + Tool Registry + 沙箱 + AuditLog）：
+**当前（Phase 1–5）** — FastAPI + LangGraph 双模式（澄清短路；共享 Guardrail + Tool Registry + 沙箱 + AuditLog）：
 
 ```text
                     ┌─────────────────────────────────────┐
@@ -90,9 +79,10 @@
                     └─────────────────┬───────────────────┘
                                       │
 ┌─────────────────────────────────────▼─────────────────────────────────────┐
-│  FastAPI + LangGraph（Phase 1–4 单路径）                                      │
-│  IntentAnalyzer → ClarificationChecker → RouteEmit → SchemaRetriever       │
-│    → SQLGenerator → SQLGuardrail → Tool Registry → AnswerComposer          │
+│  FastAPI + LangGraph（Phase 1–5 ReAct / Coordinator）                       │
+│  MemoryLoad → Intent → SlotMerge → Clarify → ComplexityRouter              │
+│    → ReAct | Coordinator → Guardrail → Execute → Repair×1 → Answer         │
+│    → MemorySave                                                             │
 │  SSE: node_* / route_decision / tool_start / tool_end                       │
 │  AuditLog: logs/audit.jsonl（脱敏，⟂ Prompt）                               │
 └─────────────────────────────────────┬─────────────────────────────────────┘
@@ -102,7 +92,7 @@
                     └─────────────────────────────────────┘
 ```
 
-**目标（Phase 5+）** — Memory 读写、ComplexityRouter、ReAct / Coordinator 子图、Repair / Chart UI；详见 [`03-Agent设计`](./docs/03-Agent设计.md)。
+Memory 使用 Session 槽位、`preferences_json` 与最近摘要列表，不使用 embedding / 向量检索。图表 UI 计划在 Phase 6 落地；详见 [`03-Agent设计`](./docs/03-Agent设计.md)。
 
 编排选型：**[LangGraph](https://github.com/langchain-ai/langgraph)**（状态图）+ **[LangChain](https://github.com/langchain-ai/langchain)**（LLM / Tools / Memory）。  
 SQL 安全为确定性独立模块，不使用黑盒 SQL Agent。  
@@ -129,7 +119,7 @@ SQL 安全为确定性独立模块，不使用黑盒 SQL Agent。
 
 - 自然语言经营分析（GMV、退款率、转化率、渠道 TopN 等）
 - 注册 / 登录；`admin` 需邀请码
-- SSE 流式 Trace（含 `route_decision`、`tool_start` / `tool_end`）、SQL、结果表、结论（图表 UI 后续 Phase）
+- SSE 流式 Trace（含 `route_decision`、`tool_start` / `tool_end`）、SQL、结果表、结论（图表 UI 为 Phase 6）
 - analyst 只读 + 敏感字段拦截；admin 受控写（INSERT/UPDATE/DELETE）
 - Session 多轮槽位 + 跨 Session「偏好 JSON + 最近摘要列表」（无向量）
 - 评测集与指标脚本

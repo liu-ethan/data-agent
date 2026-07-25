@@ -20,6 +20,16 @@ class AgentState(TypedDict, total=False):
     route_source: str | None  # Phase 3 恒为 "model"
     slots: dict | None
 
+    # 记忆
+    session_slots: dict | None
+    user_preferences: dict | None
+    recent_summaries: list[dict] | None
+
+    # ReAct
+    react_messages: list[dict] | None
+    react_step: int
+    pending_tool_calls: list[dict]
+
     # 澄清
     need_clarification: bool
     clarification_question: str | None

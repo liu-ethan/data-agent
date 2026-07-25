@@ -48,8 +48,17 @@ def test_chat_sse_happy_path(client):
         "app.agent.nodes.intent_analyzer.chat_completion",
         return_value=json.dumps(intent_json, ensure_ascii=False),
     ), patch(
-        "app.agent.sql_generator.generate_sql",
-        return_value="SELECT COUNT(*) AS c FROM orders",
+        "app.agent.nodes.react_agent.chat_completion_with_tools",
+        return_value={
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-propose",
+                    "name": "propose_sql",
+                    "arguments": {"sql": "SELECT COUNT(*) AS c FROM orders"},
+                }
+            ],
+        },
     ), patch(
         "app.agent.answer_composer.compose_answer",
         return_value="订单很多",

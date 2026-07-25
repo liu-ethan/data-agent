@@ -6,9 +6,10 @@ def test_graph_compiles():
     assert g is not None
 
 
-def test_route_emit_defaults():
-    from app.agent.nodes.route_emit import route_emit
-    out = route_emit({"route_mode": None})
+def test_complexity_router_defaults():
+    from app.agent.nodes.complexity_router import complexity_router
+
+    out = complexity_router({"question": "", "slots": None, "route_mode": None})
     assert out["route_mode"] == "react"
     assert out["route_source"] == "model"
 

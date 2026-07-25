@@ -14,9 +14,23 @@ from app.agent.vocab import (
 
 _ROUTE_MODES = frozenset({"react", "coordinator"})
 _JSON_FENCE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+_CONTEXT_VALUE_LIMIT = 300
 
 
-def build_intent_prompt(question: str) -> list[dict]:
+def _context_line(label: str, value: object) -> str:
+    serialized = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) > _CONTEXT_VALUE_LIMIT:
+        serialized = f"{serialized[:_CONTEXT_VALUE_LIMIT]}…"
+    return f"{label}: {serialized}"
+
+
+def build_intent_prompt(
+    question: str,
+    *,
+    session_slots: dict | None = None,
+    preferences: dict | None = None,
+    recent_summaries: list[dict] | None = None,
+) -> list[dict]:
     intent_list = ", ".join(
         sorted(i for i in INTENTS if i != "unknown")
     ) + ", unknown"
@@ -47,9 +61,22 @@ route_mode 说明:
 - need_clarification (bool)
 - clarification_question (string|null)
 """
+    context_lines = []
+    if session_slots:
+        context_lines.append(_context_line("会话槽位", session_slots))
+    if preferences:
+        context_lines.append(_context_line("用户偏好", preferences))
+    if recent_summaries:
+        context_lines.append(_context_line("近期分析", recent_summaries))
+    user_content = question
+    if context_lines:
+        user_content += (
+            "\n\n参考上下文（仅用于理解追问，不覆盖用户明确表达）:\n"
+            + "\n".join(context_lines)
+        )
     return [
         {"role": "system", "content": system},
-        {"role": "user", "content": question},
+        {"role": "user", "content": user_content},
     ]
 
 
@@ -118,7 +145,12 @@ def _normalize_parsed(data: dict) -> dict:
 
 def intent_analyzer(state: AgentState) -> dict:
     question = state.get("question") or ""
-    messages = build_intent_prompt(question)
+    messages = build_intent_prompt(
+        question,
+        session_slots=state.get("session_slots"),
+        preferences=state.get("user_preferences"),
+        recent_summaries=state.get("recent_summaries"),
+    )
     raw = chat_completion(messages)
     parsed = _extract_json_object(raw)
     if parsed is None:

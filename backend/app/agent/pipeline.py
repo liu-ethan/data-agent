@@ -14,16 +14,26 @@ def _summarize(node: str, state: dict) -> str:
         return str(state.get("intent") or "unknown")
     if node == "ClarificationChecker":
         return "clarification_needed" if state.get("need_clarification") else "clear"
-    if node == "RouteEmit":
+    if node == "ComplexityRouter":
         return str(state.get("route_mode") or "react")
+    if node == "ReActAgent":
+        if state.get("pending_tool_calls"):
+            return "tool_requested"
+        return "sql_generated" if state.get("generated_sql") else "completed"
+    if node == "ReActTools":
+        return "sql_proposed" if state.get("generated_sql") else "tools_executed"
     if node == "SQLGuardrail":
         return "passed"
     return {
+        "MemoryLoad": "loaded",
+        "SlotMerge": "merged",
         "ClarificationReply": "composed",
         "SchemaRetriever": "retrieved",
         "SQLGenerator": "sql_generated",
         "SQLExecutor": "executed",
+        "SQLRepairer": "sql_repaired",
         "AnswerComposer": "composed",
+        "MemorySave": "saved",
     }.get(node, "completed")
 
 
@@ -52,7 +62,7 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
                     "node_end",
                     {"node": node, "summary": _summarize(node, merged)},
                 )
-                if node == "RouteEmit":
+                if node == "ComplexityRouter":
                     yield (
                         "route_decision",
                         {
@@ -60,12 +70,27 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
                             "route_source": merged.get("route_source"),
                         },
                     )
-                if node == "SQLGenerator" and merged.get("generated_sql"):
+                if (
+                    node in ("SQLGenerator", "ReActTools")
+                    and isinstance(delta, dict)
+                    and delta.get("generated_sql")
+                ):
                     yield (
                         "sql",
-                        {"sql": merged["generated_sql"], "repaired": False},
+                        {"sql": delta["generated_sql"], "repaired": False},
                     )
-                if isinstance(delta, dict) and delta.get("error") is not None:
+                if node == "SQLRepairer" and merged.get("generated_sql"):
+                    yield (
+                        "sql",
+                        {"sql": merged["generated_sql"], "repaired": True},
+                    )
+                if (
+                    isinstance(delta, dict)
+                    and delta.get("error") is not None
+                    and not (
+                        node == "SQLExecutor" and not merged.get("repaired")
+                    )
+                ):
                     yield ("error", {"message": merged["error"]})
                 if node == "SQLExecutor" and merged.get("rows") is not None:
                     yield (

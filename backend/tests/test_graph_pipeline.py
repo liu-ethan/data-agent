@@ -10,6 +10,19 @@ def _events(state):
     return list(iter_pipeline_events(state))
 
 
+def _propose_sql(sql):
+    return {
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call-propose",
+                "name": "propose_sql",
+                "arguments": {"sql": sql},
+            }
+        ],
+    }
+
+
 def test_clarification_path_no_sql(tmp_db_path):
     init_database(reset=True)
     intent_json = {
@@ -38,6 +51,11 @@ def test_clarification_path_no_sql(tmp_db_path):
         })
     names = [e for e, _ in events]
     assert "route_decision" in names
+    assert any(
+        e == "node_end"
+        and d == {"node": "ComplexityRouter", "summary": "react"}
+        for e, d in events
+    )
     assert "sql" not in names
     assert "rows" not in names
     assert any(e == "answer" for e in names)
@@ -62,15 +80,16 @@ def test_happy_path_events(tmp_db_path):
         "need_clarification": False,
         "clarification_question": None,
     }
+    sql = (
+        "SELECT channel, SUM(pay_amount) AS gmv FROM orders "
+        "GROUP BY channel ORDER BY gmv DESC LIMIT 5"
+    )
     with patch(
         "app.agent.nodes.intent_analyzer.chat_completion",
         return_value=json.dumps(intent_json, ensure_ascii=False),
     ), patch(
-        "app.agent.sql_generator.generate_sql",
-        return_value=(
-            "SELECT channel, SUM(pay_amount) AS gmv FROM orders "
-            "GROUP BY channel ORDER BY gmv DESC LIMIT 5"
-        ),
+        "app.agent.nodes.react_agent.chat_completion_with_tools",
+        return_value=_propose_sql(sql),
     ), patch(
         "app.agent.answer_composer.compose_answer",
         return_value="渠道 A 领先",
@@ -89,7 +108,7 @@ def test_happy_path_events(tmp_db_path):
     by = {e: d for e, d in events}
     assert "run_start" in by
     assert by["route_decision"]["route_mode"] == "react"
-    assert by["route_decision"]["route_source"] == "model"
+    assert by["route_decision"]["route_source"] == "rule_override"
     assert "sql" in by
     assert "rows" in by
     assert by["answer"]["text"] == "渠道 A 领先"
@@ -97,6 +116,11 @@ def test_happy_path_events(tmp_db_path):
     names = [e for e, _ in events]
     assert "tool_start" in names
     assert "tool_end" in names
+    assert any(
+        e == "node_end"
+        and d == {"node": "ComplexityRouter", "summary": "react"}
+        for e, d in events
+    )
 
 
 def test_guardrail_rejection_emits_error_without_rows(tmp_db_path):
@@ -119,8 +143,8 @@ def test_guardrail_rejection_emits_error_without_rows(tmp_db_path):
         "app.agent.nodes.intent_analyzer.chat_completion",
         return_value=json.dumps(intent_json, ensure_ascii=False),
     ), patch(
-        "app.agent.sql_generator.generate_sql",
-        return_value="DELETE FROM orders",
+        "app.agent.nodes.react_agent.chat_completion_with_tools",
+        return_value=_propose_sql("DELETE FROM orders"),
     ):
         events = _events({
             "question": "删除上个月的订单",
@@ -137,6 +161,11 @@ def test_guardrail_rejection_emits_error_without_rows(tmp_db_path):
     names = [event for event, _ in events]
     assert "error" in names
     assert "rows" not in names
+    node_names = [
+        data["node"] for event, data in events if event == "node_end"
+    ]
+    assert "SQLRepairer" not in node_names
+    assert "MemorySave" in node_names
     guardrail_end = next(
         data
         for event, data in events
@@ -161,18 +190,25 @@ def test_executor_failure_emits_error_and_skips_answer_composer(tmp_db_path):
         "need_clarification": False,
         "clarification_question": None,
     }
+    sql = (
+        "SELECT channel, SUM(pay_amount) AS gmv FROM orders "
+        "GROUP BY channel"
+    )
     with patch(
         "app.agent.nodes.intent_analyzer.chat_completion",
         return_value=json.dumps(intent_json, ensure_ascii=False),
     ), patch(
-        "app.agent.sql_generator.generate_sql",
+        "app.agent.nodes.react_agent.chat_completion_with_tools",
+        return_value=_propose_sql(sql),
+    ), patch(
+        "app.tools.builtins.sandbox_execute",
+        side_effect=SandboxError("database unavailable"),
+    ), patch(
+        "app.agent.nodes.sql_repairer.chat_completion",
         return_value=(
             "SELECT channel, SUM(pay_amount) AS gmv FROM orders "
             "GROUP BY channel"
         ),
-    ), patch(
-        "app.tools.builtins.sandbox_execute",
-        side_effect=SandboxError("database unavailable"),
     ):
         events = _events({
             "question": "上个月各渠道 GMV 是多少？",
@@ -199,3 +235,66 @@ def test_executor_failure_emits_error_and_skips_answer_composer(tmp_db_path):
         if event == "node_end" and data["node"] == "SQLExecutor"
     )
     assert executor_end["summary"] == "failed"
+
+
+def test_repair_then_guardrail_and_success(tmp_db_path):
+    init_database(reset=True)
+    intent_json = {
+        "intent": "sales_analysis",
+        "confidence": 0.9,
+        "summary": "gmv",
+        "route_mode": "coordinator",
+        "slots": {
+            "metrics": ["gmv"],
+            "time_range": "last_30d",
+            "group_by": ["channel"],
+            "top_n": 5,
+        },
+        "need_clarification": False,
+        "clarification_question": None,
+    }
+    bad_sql = "SELECT channel, SUM(pay_ammount) AS gmv FROM orders GROUP BY channel"
+    good_sql = (
+        "SELECT channel, SUM(pay_amount) AS gmv FROM orders "
+        "WHERE status = 'completed' GROUP BY channel LIMIT 5"
+    )
+
+    with patch(
+        "app.agent.nodes.intent_analyzer.chat_completion",
+        return_value=json.dumps(intent_json),
+    ), patch(
+        "app.agent.sql_generator.generate_sql",
+        return_value=bad_sql,
+    ), patch(
+        "app.agent.nodes.sql_repairer.chat_completion",
+        return_value=good_sql,
+    ), patch(
+        "app.agent.answer_composer.compose_answer",
+        return_value="ok",
+    ):
+        events = _events({
+            "question": "对比各渠道 GMV Top5",
+            "session_id": "s_repair",
+            "user_id": "1",
+            "user_role": "analyst",
+            "request_id": "req_r",
+            "trace_id": "req_r",
+            "need_clarification": False,
+            "repaired": False,
+            "agent_trace": [],
+        })
+
+    names = [event for event, _ in events]
+    assert "route_decision" in names
+    assert "error" not in names
+    sql_events = [data for event, data in events if event == "sql"]
+    assert sum(bool(data.get("repaired")) for data in sql_events) == 1
+    node_names = [
+        data["node"] for event, data in events if event == "node_end"
+    ]
+    repair_index = node_names.index("SQLRepairer")
+    assert node_names.index("SQLGuardrail", repair_index + 1) > repair_index
+    assert node_names.index("SQLExecutor", repair_index + 1) > repair_index
+    assert node_names.count("SQLRepairer") == 1
+    assert "MemorySave" in node_names
+    assert ("answer", {"text": "ok"}) in events

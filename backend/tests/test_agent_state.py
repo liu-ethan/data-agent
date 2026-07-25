@@ -13,6 +13,11 @@ def test_agent_state_accepts_phase3_fields():
         "route_mode": "react",
         "route_source": "model",
         "slots": {"metrics": ["gmv"], "time_range": "last_month"},
+        "session_slots": None,
+        "user_preferences": {"default_time_range": "last_month"},
+        "recent_summaries": [],
+        "react_messages": [],
+        "react_step": 0,
         "need_clarification": False,
         "relevant_tables": ["orders"],
         "metric_specs": [],
@@ -20,3 +25,4 @@ def test_agent_state_accepts_phase3_fields():
     }
     assert state["route_mode"] == "react"
     assert state["slots"]["metrics"] == ["gmv"]
+    assert state["react_step"] == 0
