@@ -131,3 +131,22 @@ def test_render_chart_returns_config():
     assert out.ok
     assert out.data["type"] in {"bar", "line", "pie", "table"}
     assert "x" in out.data and "y" in out.data
+
+
+def test_render_chart_uses_plan_chart_heuristic():
+    from unittest.mock import patch
+
+    reg = ensure_builtins_registered()
+    with patch("app.agent.chart_planner.chat_completion") as m:
+        out = reg.invoke(
+            "render_chart",
+            {
+                "columns": ["channel", "gmv"],
+                "rows": [{"channel": "app", "gmv": 1}],
+                "title": "渠道 GMV",
+            },
+            context=_ctx(),
+        )
+    m.assert_not_called()
+    assert out.ok
+    assert out.data["type"] == "bar"

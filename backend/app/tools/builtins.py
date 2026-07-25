@@ -19,22 +19,24 @@ def _sql_detail(sql: str) -> dict:
     }
 
 
-def _looks_numeric(values: list) -> bool:
-    seen = False
-    for value in values:
-        if value is None:
-            continue
-        seen = True
-        if isinstance(value, (int, float)):
-            continue
-        if isinstance(value, str):
-            try:
-                float(value)
-            except ValueError:
-                return False
-        else:
-            return False
-    return seen
+def _handle_render_chart(args: dict, _context: ToolContext) -> ToolResult:
+    from app.agent.chart_planner import plan_chart
+
+    columns = list(args.get("columns") or [])
+    rows = list(args.get("rows") or [])
+    title = str(args.get("title") or "")
+    question = str(args.get("question") or "")
+    chart = plan_chart(question, columns, rows, title_hint=title)
+    if chart is None:
+        chart = {
+            "type": "table",
+            "x": columns[0] if columns else "",
+            "y": columns[1] if len(columns) > 1 else "",
+            "title": title,
+        }
+    elif title and not chart.get("title"):
+        chart = {**chart, "title": title}
+    return ToolResult(ok=True, data=chart)
 
 
 def _handle_query_schema(_args: dict, context: ToolContext) -> ToolResult:
@@ -119,36 +121,6 @@ def _is_write_sql(sql: str) -> bool:
     if re.match(r"WITH\b", head, re.IGNORECASE):
         return bool(re.search(r"\b(INSERT|UPDATE|DELETE)\b", head, re.IGNORECASE))
     return False
-
-
-def _handle_render_chart(args: dict, _context: ToolContext) -> ToolResult:
-    columns = list(args.get("columns") or [])
-    rows = list(args.get("rows") or [])
-    title = str(args.get("title") or "")
-
-    if len(columns) >= 2:
-        y_col = columns[1]
-        values = [row.get(y_col) for row in rows if isinstance(row, dict)]
-        if _looks_numeric(values):
-            return ToolResult(
-                ok=True,
-                data={
-                    "type": "bar",
-                    "x": columns[0],
-                    "y": columns[1],
-                    "title": title,
-                },
-            )
-
-    return ToolResult(
-        ok=True,
-        data={
-            "type": "table",
-            "x": columns[0] if columns else "",
-            "y": columns[1] if len(columns) > 1 else "",
-            "title": title,
-        },
-    )
 
 
 def ensure_builtins_registered() -> ToolRegistry:

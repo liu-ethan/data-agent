@@ -44,6 +44,11 @@ class AgentState(TypedDict, total=False):
     answer: str | None
     error: str | None
 
+    # Phase 6: 图表与写操作
+    chart: dict | None
+    is_write: bool
+    affected_rows: int | None
+
     # Tool Registry 可观测（节点 delta；pipeline 映射 SSE）
     tool_events: list[dict]
 

@@ -18,3 +18,10 @@ def test_clarification_reply_sets_answer():
     from app.agent.nodes.clarification_reply import clarification_reply
     out = clarification_reply({"clarification_question": "请说明指标"})
     assert out["answer"] == "请说明指标"
+
+
+def test_graph_has_chart_planner_node():
+    g = build_graph()
+    # langgraph CompiledGraph exposes nodes via get_graph
+    names = set(g.get_graph().nodes)
+    assert "ChartPlanner" in names

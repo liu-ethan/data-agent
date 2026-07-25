@@ -22,7 +22,13 @@ def test_agent_state_accepts_phase3_fields():
         "relevant_tables": ["orders"],
         "metric_specs": [],
         "repaired": False,
+        "chart": {"type": "bar", "x": "channel", "y": "gmv", "title": "t"},
+        "is_write": False,
+        "affected_rows": None,
     }
     assert state["route_mode"] == "react"
     assert state["slots"]["metrics"] == ["gmv"]
     assert state["react_step"] == 0
+    assert state["chart"]["type"] == "bar"
+    assert state["is_write"] is False
+    assert state["affected_rows"] is None

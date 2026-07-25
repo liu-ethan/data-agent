@@ -11,5 +11,7 @@ def answer_composer_node(state: AgentState) -> dict:
         state.get("question") or "",
         state.get("columns") or [],
         state.get("rows") or [],
+        is_write=bool(state.get("is_write")),
+        affected_rows=state.get("affected_rows"),
     )
     return {"answer": answer}

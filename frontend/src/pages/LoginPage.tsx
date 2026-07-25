@@ -45,7 +45,7 @@ function QueryTicker() {
           <span className="animate-caret text-accent">▍</span>
         </p>
         <p className="truncate text-muted">{item.sql}</p>
-        <p className="text-accent">✓ 已生成结果 · {item.ms}ms</p>
+        <p className="text-accent">✓ 已生成结果与图表 · {item.ms}ms</p>
       </div>
     </div>
   )
@@ -125,7 +125,7 @@ export default function LoginPage() {
             <p className="animate-rise text-sm font-medium uppercase tracking-[0.18em] text-muted">
               面向电商团队的经营分析助手
             </p>
-            <h1 className="animate-rise mt-4 font-display text-[2.75rem] font-medium leading-[1.08] tracking-tight text-ink sm:text-[3.5rem]">
+            <h1 className="animate-rise mt-4 font-display text-[2.75rem] font-medium leading-[1.08] tracking-tight text-ink sm:text-[3.75rem]">
               data-analysis
               <br />
               <span className="relative inline-block text-accent">
@@ -138,7 +138,7 @@ export default function LoginPage() {
               style={{ animationDelay: '120ms' }}
             >
               用一句自然语言提问，Agent 生成经过安全校验的 SQL，
-              秒级返回结论与明细数据表。
+              秒级返回结论、明细表与自动图表。
             </p>
 
             <div className="mt-8 max-w-md" style={{ animationDelay: '200ms' }}>

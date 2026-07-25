@@ -24,6 +24,9 @@ def _summarize(node: str, state: dict) -> str:
         return "sql_proposed" if state.get("generated_sql") else "tools_executed"
     if node == "SQLGuardrail":
         return "passed"
+    if node == "ChartPlanner":
+        ch = state.get("chart")
+        return "skipped" if not ch else str(ch.get("type") or "table")
     return {
         "MemoryLoad": "loaded",
         "SlotMerge": "merged",
@@ -92,7 +95,19 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
                     )
                 ):
                     yield ("error", {"message": merged["error"]})
-                if node == "SQLExecutor" and merged.get("rows") is not None:
+                if node == "SQLExecutor" and merged.get("is_write"):
+                    yield (
+                        "write_result",
+                        {
+                            "affected_rows": merged.get("affected_rows"),
+                            "sql": merged.get("generated_sql") or "",
+                        },
+                    )
+                if (
+                    node == "SQLExecutor"
+                    and not merged.get("is_write")
+                    and merged.get("rows") is not None
+                ):
                     yield (
                         "rows",
                         {
@@ -100,6 +115,8 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
                             "rows": merged.get("rows") or [],
                         },
                     )
+                if node == "ChartPlanner" and merged.get("chart"):
+                    yield ("chart", dict(merged["chart"]))
                 if (
                     node in ("AnswerComposer", "ClarificationReply")
                     and merged.get("answer")
@@ -116,5 +133,6 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
             "latency_ms": latency,
             "need_clarification": bool(merged.get("need_clarification")),
             "clarification_question": merged.get("clarification_question"),
+            "repaired": bool(merged.get("repaired")),
         },
     )

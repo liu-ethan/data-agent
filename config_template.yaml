@@ -17,8 +17,10 @@ backend:
   cors_origins:
     - "http://localhost:5173"
     - "http://127.0.0.1:5173"
+    # 局域网访问时补上前端源，例如：
+    # - "http://192.168.x.x:5173"
 
 frontend:
   port: 5173
-  # 浏览器访问后端的基址（勿尾斜杠）
-  api_base_url: "http://127.0.0.1:8000"
+  # 空字符串 = 同源走 Vite /api 代理（推荐）；直连后端时写完整基址（勿尾斜杠）
+  api_base_url: ""

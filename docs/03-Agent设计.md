@@ -21,7 +21,7 @@
             ├─ Schema / Metric 步骤
             ├─ SQL 步骤（生成 → Guardrail → 沙箱 → Repair）
             └─ Chart / Insight 步骤
-  → AnswerComposer
+  → SQLGuardrail → SQLExecutor →（成功且非写）ChartPlanner → AnswerComposer
   → Memory 写回（更新 session_turns；成功则更新偏好 / 追加摘要）
   → END
 ```
@@ -367,7 +367,9 @@ admin：
 
 ### 2.9 ChartPlanner
 
-作用：根据查询结果规划图表。
+作用：根据查询结果规划图表。**位于主图尾环**——`SQLExecutor` 成功且非写操作时进入本节点，再到 `AnswerComposer`；写操作或空结果直接短路（`chart=None`），主路径**不**经 Tool Registry 调用（Registry 中 `render_chart` 仍注册供 ReAct / 外部扩展使用）。
+
+实现策略：**轻量 LLM + 启发式降级**——优先一次 LLM 调用产出图表配置，失败或字段校验不通过时回退到基于列名/数据类型的启发式规则（日期列→`line`，占比列→`pie`，其余分类+数值→`bar`，无可用列→`table`）。
 
 支持：
 

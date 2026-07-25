@@ -3,6 +3,7 @@ from __future__ import annotations
 from langgraph.graph import END, START, StateGraph
 
 from app.agent.nodes.answer_composer_node import answer_composer_node
+from app.agent.nodes.chart_planner import chart_planner_node
 from app.agent.nodes.clarification_checker import clarification_checker
 from app.agent.nodes.clarification_reply import clarification_reply
 from app.agent.nodes.complexity_router import complexity_router
@@ -43,7 +44,7 @@ def _after_guardrail(state: AgentState) -> str:
 
 def _after_executor(state: AgentState) -> str:
     if not state.get("error"):
-        return "AnswerComposer"
+        return "ChartPlanner"
     if state.get("repaired"):
         return "MemorySave"
     return "SQLRepairer"
@@ -64,6 +65,7 @@ def build_graph():
     g.add_node("SQLGuardrail", sql_guardrail_node)
     g.add_node("SQLExecutor", sql_executor_node)
     g.add_node("SQLRepairer", sql_repairer)
+    g.add_node("ChartPlanner", chart_planner_node)
     g.add_node("AnswerComposer", answer_composer_node)
     g.add_node("MemorySave", memory_save)
     g.add_edge(START, "MemoryLoad")
@@ -120,12 +122,13 @@ def build_graph():
         "SQLExecutor",
         _after_executor,
         {
-            "AnswerComposer": "AnswerComposer",
+            "ChartPlanner": "ChartPlanner",
             "SQLRepairer": "SQLRepairer",
             "MemorySave": "MemorySave",
         },
     )
     g.add_edge("SQLRepairer", "SQLGuardrail")
+    g.add_edge("ChartPlanner", "AnswerComposer")
     g.add_edge("AnswerComposer", "MemorySave")
     g.add_edge("MemorySave", END)
     return g.compile()

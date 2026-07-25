@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { apiFetch } from '../api/client'
 import { streamChat } from '../api/chat'
 import { useAuth } from '../auth/AuthContext'
+import ResultChart, { type ChartConfig } from '../components/ResultChart'
 
 interface ExampleItem {
   id: string
@@ -43,6 +44,11 @@ export default function AppWorkbench() {
   const [clarificationHint, setClarificationHint] = useState<string | null>(
     null,
   )
+  const [chart, setChart] = useState<ChartConfig | null>(null)
+  const [writeResult, setWriteResult] = useState<{
+    affected_rows: number | null
+    sql: string
+  } | null>(null)
 
   const abortRef = useRef<AbortController | null>(null)
   const traceIdRef = useRef(0)
@@ -92,6 +98,8 @@ export default function AppWorkbench() {
     setLatencyMs(null)
     setGuardrailPassed(false)
     setClarificationHint(null)
+    setChart(null)
+    setWriteResult(null)
     traceIdRef.current = 0
   }
 
@@ -168,10 +176,39 @@ export default function AppWorkbench() {
                 `调用 ${String(data.tool ?? '')}`.trim(),
               )
               break
-            case 'tool_end':
+            case 'tool_end': {
+              const riskPrefix =
+                data.risk_level === 'high' ? '⚠ high · ' : ''
               pushTrace(
                 event,
-                `${String(data.tool ?? '')}: ${String(data.status ?? 'done')}`,
+                `${riskPrefix}${String(data.tool ?? '')}: ${String(data.status ?? 'done')}`,
+              )
+              break
+            }
+            case 'chart':
+              setChart({
+                type: String(data.type ?? 'table'),
+                x: String(data.x ?? ''),
+                y: String(data.y ?? ''),
+                title: data.title ? String(data.title) : undefined,
+              })
+              pushTrace(event, String(data.type ?? 'chart'))
+              break
+            case 'write_result':
+              setWriteResult({
+                affected_rows:
+                  typeof data.affected_rows === 'number'
+                    ? data.affected_rows
+                    : null,
+                sql: String(data.sql ?? ''),
+              })
+              pushTrace(
+                event,
+                `写操作 · ${
+                  typeof data.affected_rows === 'number'
+                    ? data.affected_rows
+                    : '?'
+                } 行`,
               )
               break
             case 'route_decision':
@@ -218,7 +255,9 @@ export default function AppWorkbench() {
           <p className="mt-1 text-xs text-muted">企业经营数据分析 Agent</p>
           <div className="mt-4 rounded-lg bg-accent-soft px-3 py-2 text-sm">
             <p className="font-medium text-accent">{user?.username}</p>
-            <p className="text-xs text-muted">角色 · {user?.role}</p>
+            <span className="mt-1 inline-flex rounded-md bg-surface px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-accent">
+              {user?.role}
+            </span>
           </div>
         </div>
 
@@ -349,6 +388,15 @@ export default function AppWorkbench() {
             </section>
           )}
 
+          {writeResult && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              写操作已成功执行
+              {writeResult.affected_rows != null
+                ? ` · 影响 ${writeResult.affected_rows} 行`
+                : ''}
+            </div>
+          )}
+
           {columns.length > 0 && (
             <section className="rounded-xl border border-line bg-surface p-4">
               <h2 className="text-xs font-medium uppercase tracking-wider text-muted">
@@ -380,6 +428,8 @@ export default function AppWorkbench() {
               </div>
             </section>
           )}
+
+          <ResultChart chart={chart} rows={rows} />
 
           <section className="rounded-xl border border-line bg-surface">
             <button

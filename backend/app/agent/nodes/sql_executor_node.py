@@ -31,6 +31,8 @@ def sql_executor_node(state: AgentState) -> dict:
             {
                 "columns": [],
                 "rows": [],
+                "is_write": True,
+                "affected_rows": data.get("affected_rows"),
                 "error": None,
             }
         )
@@ -39,6 +41,8 @@ def sql_executor_node(state: AgentState) -> dict:
             {
                 "columns": data.get("columns") or [],
                 "rows": data.get("rows") or [],
+                "is_write": False,
+                "affected_rows": None,
                 "error": None,
             }
         )
