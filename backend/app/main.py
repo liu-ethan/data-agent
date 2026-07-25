@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.examples import router as examples_router
 from app.api.schema import router as schema_router
 from app.auth.routes import router as auth_router
 from app.config import get_settings
@@ -19,6 +20,7 @@ def create_app() -> FastAPI:
     )
     application.add_middleware(RequestIdMiddleware)
     application.include_router(schema_router, prefix="/api")
+    application.include_router(examples_router, prefix="/api")
     application.include_router(auth_router, prefix="/api")
 
     @application.get("/health")
