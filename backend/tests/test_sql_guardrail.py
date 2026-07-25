@@ -47,16 +47,75 @@ def test_allows_semicolon_inside_string_literal():
         "CREATE",
         "ATTACH",
         "DETACH",
-        "INSERT",
-        "UPDATE",
-        "DELETE",
         "REPLACE",
         "PRAGMA",
     ],
 )
 def test_rejects_forbidden_statement_types(keyword):
     sql = f"{keyword} TABLE orders" if keyword != "PRAGMA" else "PRAGMA table_info(orders)"
+    assert not check_sql(sql, user_role="admin").ok
 
+
+def test_analyst_rejects_writes():
+    assert not check_sql(
+        "UPDATE campaigns SET budget = 1 WHERE id = 1",
+        user_role="analyst",
+    ).ok
+    assert not check_sql(
+        "INSERT INTO campaigns (id, name) VALUES (999, 'x')",
+        user_role="analyst",
+    ).ok
+    assert not check_sql(
+        "DELETE FROM campaigns WHERE id = 1",
+        user_role="analyst",
+    ).ok
+
+
+def test_admin_allows_dml_on_business_tables():
+    assert check_sql(
+        "UPDATE campaigns SET budget = 1 WHERE id = 1",
+        user_role="admin",
+    ).ok
+    assert check_sql(
+        "INSERT INTO campaigns (id, name, channel, budget) VALUES (9999, 't', 'app', 1)",
+        user_role="admin",
+    ).ok
+    assert check_sql(
+        "DELETE FROM campaigns WHERE id = 9999",
+        user_role="admin",
+    ).ok
+
+
+@pytest.mark.parametrize(
+    ("sql",),
+    [
+        ("UPDATE app_users SET role = 'admin' WHERE id = 1",),
+        ("INSERT INTO app_users (id, email) VALUES (1, 'x@y.z')",),
+        ("DELETE FROM app_users WHERE id = 1",),
+    ],
+)
+def test_admin_rejects_dml_on_app_tables(sql):
+    assert not check_sql(sql, user_role="admin").ok
+
+
+@pytest.mark.parametrize(
+    ("verb", "table"),
+    [
+        ("UPDATE", "main.app_users"),
+        ("INSERT INTO", "main.app_users"),
+        ("DELETE FROM", "main.app_users"),
+        ("UPDATE", "main.chat_sessions"),
+        ("INSERT INTO", "main.user_preferences"),
+        ("DELETE FROM", "main.session_turns"),
+    ],
+)
+def test_admin_rejects_schema_qualified_dml_on_app_tables(verb, table):
+    if verb == "UPDATE":
+        sql = f"UPDATE {table} SET role = 'admin' WHERE id = 1"
+    elif verb.startswith("INSERT"):
+        sql = f"INSERT INTO {table} (id) VALUES (1)"
+    else:
+        sql = f"DELETE FROM {table} WHERE id = 1"
     assert not check_sql(sql, user_role="admin").ok
 
 

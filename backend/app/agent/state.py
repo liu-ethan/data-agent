@@ -34,6 +34,9 @@ class AgentState(TypedDict, total=False):
     answer: str | None
     error: str | None
 
+    # Tool Registry 可观测（节点 delta；pipeline 映射 SSE）
+    tool_events: list[dict]
+
     agent_trace: list[dict]
     latency_ms: int
     repaired: bool

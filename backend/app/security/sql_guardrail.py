@@ -34,18 +34,21 @@ _ALIAS_STOP_WORDS = {
     "UNION",
     "WHERE",
 }
-_FORBIDDEN_KEYWORDS = (
+_DDL_OR_DANGEROUS = (
     "DROP",
     "ALTER",
     "TRUNCATE",
     "CREATE",
     "ATTACH",
     "DETACH",
-    "INSERT",
-    "UPDATE",
-    "DELETE",
     "REPLACE",
     "PRAGMA",
+)
+_WRITE_KEYWORDS = ("INSERT", "UPDATE", "DELETE")
+_WRITE_TABLE_RE = re.compile(
+    rf"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?P<table>{_IDENTIFIER})"
+    rf"(?:\s*\.\s*(?P<qualified>{_IDENTIFIER}))?",
+    re.IGNORECASE,
 )
 
 
@@ -145,7 +148,7 @@ def _select_lists(sql: str) -> list[str]:
 
 
 def check_sql(sql: str, *, user_role: str) -> GuardrailResult:
-    """Check whether a single read-only SQL query is safe for the role."""
+    """Check whether a single SQL statement is safe for the role."""
     if not sql.strip():
         return _reject("SQL must not be empty")
     if user_role not in {"analyst", "admin"}:
@@ -165,22 +168,22 @@ def check_sql(sql: str, *, user_role: str) -> GuardrailResult:
         sql_without_strings,
     ).upper()
     query_start = _LEADING_COMMENT_RE.sub("", normalized)
-    if not re.match(r"(?:SELECT|WITH)\b", query_start):
-        return _reject("Only SELECT or WITH queries are allowed")
-
-    for keyword in _FORBIDDEN_KEYWORDS:
-        if re.search(rf"\b{keyword}\b", normalized):
-            return _reject(f"{keyword} is not allowed")
-
-    sources = _sources(sql_without_comments)
     blocked_tables = {table_name.upper() for table_name in APP_TABLES} | {
         "SQLITE_MASTER"
     }
-    for table_name, _ in sources:
-        if table_name in blocked_tables:
-            return _reject(f"Access to {table_name.lower()} is not allowed")
 
     if user_role == "analyst":
+        if not re.match(r"(?:SELECT|WITH)\b", query_start):
+            return _reject("Only SELECT or WITH queries are allowed")
+        for keyword in _DDL_OR_DANGEROUS + _WRITE_KEYWORDS:
+            if re.search(rf"\b{keyword}\b", normalized):
+                return _reject(f"{keyword} is not allowed")
+
+        sources = _sources(sql_without_comments)
+        for table_name, _ in sources:
+            if table_name in blocked_tables:
+                return _reject(f"Access to {table_name.lower()} is not allowed")
+
         if any(table_name == "USERS" for table_name, _ in sources):
             non_user_qualifiers = {
                 qualifier
@@ -209,5 +212,25 @@ def check_sql(sql: str, *, user_role: str) -> GuardrailResult:
                     qualifier = sensitive.group("qualifier")
                     if qualifier not in non_user_qualifiers:
                         return _reject("Analysts cannot access sensitive user columns")
+
+        return GuardrailResult(ok=True, reason=None)
+
+    if not re.match(r"(?:SELECT|WITH|INSERT|UPDATE|DELETE)\b", query_start):
+        return _reject("Only SELECT/WITH/INSERT/UPDATE/DELETE are allowed")
+    for keyword in _DDL_OR_DANGEROUS:
+        if re.search(rf"\b{keyword}\b", normalized):
+            return _reject(f"{keyword} is not allowed")
+
+    sources = _sources(sql_without_comments)
+    for table_name, _ in sources:
+        if table_name in blocked_tables:
+            return _reject(f"Access to {table_name.lower()} is not allowed")
+
+    for match in _WRITE_TABLE_RE.finditer(sql_without_comments):
+        table_name = _unquote_identifier(
+            match.group("qualified") or match.group("table")
+        )
+        if table_name in blocked_tables:
+            return _reject(f"Access to {table_name.lower()} is not allowed")
 
     return GuardrailResult(ok=True, reason=None)

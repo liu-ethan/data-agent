@@ -11,3 +11,4 @@ backend/data/*.db
 *.db
 .worktrees/
 .superpowers/
+logs/

@@ -9,12 +9,12 @@
 
 面向电商经营分析的自然语言数据分析 Agent。
 
-基于 [LangGraph](https://github.com/langchain-ai/langgraph) 做状态图编排，基于 [LangChain](https://github.com/langchain-ai/langchain) 提供 LLM / Tools / Memory 抽象。用户用自然语言提问，**当前实现（Phase 3）** 为 LangGraph **单路径**：意图识别 → 澄清 → 分流（`RouteEmit`）→ Schema → SQL → Guardrail → 执行 → 作答；澄清命中则直接返回问句、**不跑 SQL**；SSE 含 `node_*` / `route_decision`（`route_source=model`）。ReAct / Coordinator 双模式子图为 **目标形态（Phase 5）**，见下文「主链路」。
+基于 [LangGraph](https://github.com/langchain-ai/langgraph) 做状态图编排，基于 [LangChain](https://github.com/langchain-ai/langchain) 提供 LLM / Tools / Memory 抽象。用户用自然语言提问，**当前实现（Phase 1–4）** 为 LangGraph **单路径**：意图识别 → 澄清 → 分流（`RouteEmit`）→ Schema → SQL → Guardrail → **Tool Registry**（`validate_sql` / `execute_sql`）→ 作答；澄清命中则直接返回问句、**不跑 SQL**；SSE 含 `node_*` / `route_decision` / `tool_start` / `tool_end`（`route_source=model`）。ReAct / Coordinator 双模式子图为 **目标形态（Phase 5）**，见下文「主链路」。
 
 [![Agent 架构 · LangGraph 节点图](./docs/architecture-16x9.png)](./docs/architecture-16x9.html)
 
 > **状态说明**：规格以 [`docs/`](./docs/需求文档.md) 为准（尤其 [`03-Agent设计`](./docs/03-Agent设计.md)）。按 [`06-开发计划`](./docs/06-开发计划.md) 分 Phase 实现。  
-> **Phase 1–3 已落地**：脚手架与 `init_db`；JWT 注册/登录；鉴权后的 `GET /api/schema` / `examples`；`POST /api/chat` SSE；浅白营销登录页 `/` 与工作台 `/app`。Chat 主链路已用 **LangGraph 单路径状态图**（Intent → Clarification → RouteEmit → Schema → SQL → Guardrail → Executor → Answer），SSE 含 `node_*` / `route_decision`；分流看 `route_mode`（`intent` ≠ `route_mode`），本阶段 `route_source=model`，ReAct / Coordinator 双模式子图在 Phase 5。模糊问题经澄清后直接返回问句，**不跑 SQL**；完整沙箱 / AuditLog / 图表等仍为 Phase 4+。  
+> **Phase 1–4 已落地**：脚手架与 `init_db`；JWT 注册/登录；鉴权后的 `GET /api/schema` / `examples`；`POST /api/chat` SSE；浅白营销登录页 `/` 与工作台 `/app`。Chat 主链路为 **LangGraph 单路径**（Intent → Clarification → RouteEmit → Schema → SQL → Guardrail → Tool Registry → Answer）；**SQL 执行唯一入口**为 Tool Registry（`validate_sql` / `execute_sql`）。**analyst** 只读 + 敏感列拦截；**admin** 受控 INSERT/UPDATE/DELETE；禁 DDL、多语句、访问全部应用表。**SQLSandboxExecutor**：analyst 用 `PRAGMA query_only`，admin 可写；明细 `LIMIT 100`，写操作影响行上限 100。**AuditLog** 写入 `logs/audit.jsonl`（脱敏），与 Prompt 分离。SSE 含 `node_*` / `route_decision` / `tool_start` / `tool_end`；分流看 `route_mode`（`intent` ≠ `route_mode`），本阶段 `route_source=model`。`render_chart` 已在 Registry 注册，主图**未**自动调用。ReAct / Coordinator、Repair 循环、图表 UI、Memory 读写为后续 Phase。模糊问题经澄清后直接返回问句，**不跑 SQL**。  
 > **Python**：强制使用 conda 环境 `python3.12`（见 [`AGENTS.md`](./AGENTS.md)），勿用系统 Python 或仓库内 `.venv`。  
 > **安全**：默认可演示的 chat 路径上 SQL **必须**经 Guardrail；无「跳过校验直连 DB」的 Demo 分支。
 
@@ -49,18 +49,18 @@
 | 无账号体系 | JWT 登录；analyst / admin（邀请码） |
 | 无治理 | Tool Registry + AuditLog（与 Prompt 分离） |
 
-**当前实现（Phase 3）— LangGraph 单路径**
+**当前实现（Phase 1–4）— LangGraph 单路径**
 
 ```text
 自然语言问题
   → IntentAnalyzer（intent 枚举 + slots 薄词表 + 建议 route_mode）
   → ClarificationChecker（需澄清则结束，不跑 SQL）
   → RouteEmit（emit route_decision；本阶段 route_source=model）
-  → SchemaRetriever → SQLGenerator → SQLGuardrail → SQLExecutor → AnswerComposer
+  → SchemaRetriever → SQLGenerator → SQLGuardrail → Tool Registry（validate_sql / execute_sql）→ AnswerComposer
 ```
 
 - `intent` ≠ 执行路径；分流字段看 `route_mode`（SSE `route_decision`）。  
-- 完整沙箱、Repair 循环、图表与 AuditLog 等为 Phase 4/6，见状态说明。
+- SSE 另含 `tool_start` / `tool_end`（Registry 调用轨迹）。Repair 循环、图表 UI、Memory 为后续 Phase；`render_chart` 已注册但主图未自动调用。
 
 **目标形态（Phase 5）— ReAct / Coordinator 双模式**
 
@@ -78,7 +78,7 @@
 
 ## 架构
 
-**当前（Phase 3）** — FastAPI + LangGraph 单路径（澄清短路；最小 Guardrail + 执行）：
+**当前（Phase 1–4）** — FastAPI + LangGraph 单路径（澄清短路；Guardrail + Tool Registry + 沙箱 + AuditLog）：
 
 ```text
                     ┌─────────────────────────────────────┐
@@ -90,10 +90,11 @@
                     └─────────────────┬───────────────────┘
                                       │
 ┌─────────────────────────────────────▼─────────────────────────────────────┐
-│  FastAPI + LangGraph（Phase 3 单路径）                                        │
+│  FastAPI + LangGraph（Phase 1–4 单路径）                                      │
 │  IntentAnalyzer → ClarificationChecker → RouteEmit → SchemaRetriever       │
-│    → SQLGenerator → SQLGuardrail → SQLExecutor → AnswerComposer            │
-│  SSE: node_* / route_decision（route_source=model）                         │
+│    → SQLGenerator → SQLGuardrail → Tool Registry → AnswerComposer          │
+│  SSE: node_* / route_decision / tool_start / tool_end                       │
+│  AuditLog: logs/audit.jsonl（脱敏，⟂ Prompt）                               │
 └─────────────────────────────────────┬─────────────────────────────────────┘
                                       │
                     ┌─────────────────▼───────────────────┐
@@ -101,7 +102,7 @@
                     └─────────────────────────────────────┘
 ```
 
-**目标（Phase 5+）** — Memory 读写、ComplexityRouter、ReAct / Coordinator 子图、完整 Sandbox / Repair / Chart、AuditLog（JSONL）⟂ agent_trace；详见 [`03-Agent设计`](./docs/03-Agent设计.md)。
+**目标（Phase 5+）** — Memory 读写、ComplexityRouter、ReAct / Coordinator 子图、Repair / Chart UI；详见 [`03-Agent设计`](./docs/03-Agent设计.md)。
 
 编排选型：**[LangGraph](https://github.com/langchain-ai/langgraph)**（状态图）+ **[LangChain](https://github.com/langchain-ai/langchain)**（LLM / Tools / Memory）。  
 SQL 安全为确定性独立模块，不使用黑盒 SQL Agent。  
@@ -128,7 +129,7 @@ SQL 安全为确定性独立模块，不使用黑盒 SQL Agent。
 
 - 自然语言经营分析（GMV、退款率、转化率、渠道 TopN 等）
 - 注册 / 登录；`admin` 需邀请码
-- SSE 流式 Trace（含 `route_decision`）、SQL、结果表、图表、结论
+- SSE 流式 Trace（含 `route_decision`、`tool_start` / `tool_end`）、SQL、结果表、结论（图表 UI 后续 Phase）
 - analyst 只读 + 敏感字段拦截；admin 受控写（INSERT/UPDATE/DELETE）
 - Session 多轮槽位 + 跨 Session「偏好 JSON + 最近摘要列表」（无向量）
 - 评测集与指标脚本
@@ -181,7 +182,7 @@ Vite 会读取根目录 `config.yaml`（缺失时回退 `config_template.yaml`�
 1. 在 `/` 注册：默认 `analyst`；选 `admin` 时填写 `config.yaml` 中的 `backend.admin_invite_code`  
 2. 或使用种子账号：`demo_analyst` / `demo1234`（`init_db` 写入）  
 3. 登录后进入 `/app`；未登录访问 `/app` 会回到 `/`  
-4. 工作台提问：SSE 展示 Agent Trace（含 `route_decision`）、回答、SQL、结果表；分析路径经 LangGraph 节点与最小只读 Guardrail 后执行  
+4. 工作台提问：SSE 展示 Agent Trace（含 `route_decision`、`tool_*`）、回答、SQL、结果表；SQL 经 Guardrail 与 Tool Registry 沙箱执行  
 
 ### 4. 示例问题
 
@@ -217,12 +218,12 @@ Vite 会读取根目录 `config.yaml`（缺失时回退 `config_template.yaml`�
 - 明细查询补 `LIMIT`；写操作限制影响行数  
 - 不通过则阻断，不进沙箱  
 
-**Sandbox（执行时）**
+**Sandbox（执行时，SQLSandboxExecutor）**
 
-- analyst → 只读连接；admin → 可写连接  
-- 超时、行数 / 影响行数上限  
-- 错误脱敏，不回传堆栈  
-- 写操作记入 AuditLog，Trace 标记高风险  
+- analyst → `PRAGMA query_only` 只读；admin → 可写连接  
+- 明细查询 `LIMIT 100`；写操作影响行上限 100  
+- 超时、错误脱敏，不回传堆栈  
+- 写操作记入 `logs/audit.jsonl`（AuditLog），Trace 标记高风险  
 
 **约束**：可演示 / 默认可运行路径上的 SQL **必须**经 Guardrail；开发期临时直连不得进入演示分支。
 
@@ -235,7 +236,7 @@ Vite 会读取根目录 `config.yaml`（缺失时回退 `config_template.yaml`�
 | 类型 | 用途 |
 |------|------|
 | `agent_trace` + SSE | 前端可解释展示（`node_*` / `tool_*` / `route_decision`） |
-| `AuditLog`（JSONL） | 排查、权限与写操作追溯 |
+| `AuditLog`（`logs/audit.jsonl`） | 排查、权限与写操作追溯 |
 
 关联字段：`request_id` · `trace_id` · `session_id` · `user_id` · `user_role`  
 

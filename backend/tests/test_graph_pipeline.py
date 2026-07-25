@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from app.agent.pipeline import iter_pipeline_events
 from app.db.init_db import init_database
+from app.security.sql_sandbox import SandboxError
 
 
 def _events(state):
@@ -93,6 +94,9 @@ def test_happy_path_events(tmp_db_path):
     assert "rows" in by
     assert by["answer"]["text"] == "渠道 A 领先"
     assert by["done"]["need_clarification"] is False
+    names = [e for e, _ in events]
+    assert "tool_start" in names
+    assert "tool_end" in names
 
 
 def test_guardrail_rejection_emits_error_without_rows(tmp_db_path):
@@ -167,8 +171,8 @@ def test_executor_failure_emits_error_and_skips_answer_composer(tmp_db_path):
             "GROUP BY channel"
         ),
     ), patch(
-        "app.agent.nodes.sql_executor_node.execute_sql",
-        side_effect=RuntimeError("database unavailable"),
+        "app.tools.builtins.sandbox_execute",
+        side_effect=SandboxError("database unavailable"),
     ):
         events = _events({
             "question": "上个月各渠道 GMV 是多少？",

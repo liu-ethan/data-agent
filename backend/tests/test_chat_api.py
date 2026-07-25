@@ -71,6 +71,8 @@ def test_chat_sse_happy_path(client):
     assert "event: rows" in text
     assert "event: answer" in text
     assert "event: done" in text
+    assert "event: tool_start" in text
+    assert "event: tool_end" in text
 
 
 def test_chat_sse_clarification_has_no_sql(client):

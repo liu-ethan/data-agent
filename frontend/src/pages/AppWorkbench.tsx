@@ -162,6 +162,18 @@ export default function AppWorkbench() {
               setAnswer(String(data.text ?? ''))
               pushTrace(event, '结论已生成')
               break
+            case 'tool_start':
+              pushTrace(
+                event,
+                `调用 ${String(data.tool ?? '')}`.trim(),
+              )
+              break
+            case 'tool_end':
+              pushTrace(
+                event,
+                `${String(data.tool ?? '')}: ${String(data.status ?? 'done')}`,
+              )
+              break
             case 'route_decision':
               pushTrace(
                 event,

@@ -46,6 +46,8 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
                 yield ("node_start", {"node": node})
                 if isinstance(delta, dict):
                     merged.update(delta)
+                    for item in delta.get("tool_events") or []:
+                        yield (item["event"], item.get("data") or {})
                 yield (
                     "node_end",
                     {"node": node, "summary": _summarize(node, merged)},

@@ -4,10 +4,26 @@ from app.agent.state import AgentState
 
 
 def sql_guardrail_node(state: AgentState) -> dict:
-    from app.security.sql_guardrail import check_sql
+    from app.tools.builtins import ensure_builtins_registered
+    from app.tools.schemas import ToolContext
 
-    sql = state.get("generated_sql") or ""
-    result = check_sql(sql, user_role=state["user_role"])
+    reg = ensure_builtins_registered()
+    ctx = ToolContext(
+        request_id=state["request_id"],
+        trace_id=state["trace_id"],
+        session_id=state["session_id"],
+        user_id=state["user_id"],
+        user_role=state["user_role"],
+        node="SQLGuardrail",
+    )
+    result = reg.invoke(
+        "validate_sql",
+        {"sql": state.get("generated_sql") or ""},
+        context=ctx,
+    )
+    out = {"tool_events": result.events}
     if not result.ok:
-        return {"error": result.reason or "SQL blocked by guardrail"}
-    return {"error": None}
+        out["error"] = result.error or "SQL blocked by guardrail"
+    else:
+        out["error"] = None
+    return out
