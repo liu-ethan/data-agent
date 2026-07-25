@@ -1,4 +1,4 @@
-# DataInsight Agent
+# data-analysis-agent
 
 [![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?style=flat&logo=langchain&logoColor=white)](https://github.com/langchain-ai/langgraph)
 [![LangChain](https://img.shields.io/badge/LangChain-1C3C3C?style=flat&logo=langchain&logoColor=white)](https://github.com/langchain-ai/langchain)
@@ -9,7 +9,9 @@
 
 面向电商经营分析的自然语言数据分析 Agent。
 
-基于 [LangGraph](https://github.com/langchain-ai/langgraph) 做状态图编排，基于 [LangChain](https://github.com/langchain-ai/langchain) 提供 LLM / Tools / Memory 抽象。用户用自然语言提问，系统自动完成意图识别、Schema Linking、SQL 生成、权限校验、沙箱执行、错误修复，并以 SSE 流式输出表格、图表与分析结论。
+基于 [LangGraph](https://github.com/langchain-ai/langgraph) 做状态图编排，基于 [LangChain](https://github.com/langchain-ai/langchain) 提供 LLM / Tools / Memory 抽象。用户用自然语言提问，系统经意图识别（封闭枚举 `intent` + 薄词表 `slots` + 建议 `route_mode`）、澄清与分流后，走 ReAct 或 Coordinator，再完成 Schema Linking、SQL 生成、权限校验、沙箱执行、错误修复，并以 SSE 流式输出表格、图表与分析结论。
+
+> **状态说明**：规格以 [`docs/`](./docs/需求文档.md) 为准（尤其 [`03-Agent设计`](./docs/03-Agent设计.md)）。按 [`06-开发计划`](./docs/06-开发计划.md) 分 Phase 实现；下列启动命令与功能为**目标形态**，若仓库尚无 `backend/` / `frontend/`，以当前代码为准。
 
 ---
 
@@ -34,7 +36,7 @@
 
 ## 为什么不是普通 Text-to-SQL
 
-| 普通 Demo | DataInsight Agent |
+| 普通 Demo | data-analysis-agent |
 |-----------|-------------------|
 | 一次 prompt 出 SQL | LangGraph 状态图：节点可观测、可修复 |
 | 模型直连数据库 | Guardrail + 沙箱，角色差异化权限 |
@@ -46,15 +48,22 @@
 
 ```text
 自然语言问题
-  → 意图识别 → Schema Linking → SQL 生成
+  → Memory 读入（Session / 偏好 / 摘要；两模式共用）
+  → IntentAnalyzer（intent 枚举 + slots 薄词表 + 建议 route_mode）
+  → 澄清检查 / ComplexityRouter（规则可覆盖 route_mode）
+  → ReAct 或 Coordinator（共用同一批 Tool / Guardrail）
+  → Schema Linking（业务词 → 表字段）→ SQL 生成
   → 权限校验 → 沙箱执行 → 错误修复
   → 图表规划 → 分析结论
+  → Memory 写回
 ```
 
-分流：
+分流（`intent` ≠ 路径；看 `route_mode`）：
 
-- **简单问题** → 单 Agent ReAct
-- **复杂问题** → Coordinator（Schema / SQL / Chart·Insight / Memory）
+- **简单（react）** → 单 Agent ReAct  
+- **复杂（coordinator）** → Coordinator 子图（Schema / SQL / Chart·Insight 步骤）  
+- IntentAnalyzer 建议 `route_mode`；ComplexityRouter 可用规则硬覆盖（`route_source=rule_override`）  
+- Session / 偏好与摘要的读写在主图两端，**ReAct 与 Coordinator 共用**
 
 ---
 
@@ -71,21 +80,24 @@
                                       │
 ┌─────────────────────────────────────▼─────────────────────────────────────┐
 │                         FastAPI + LangGraph                                 │
-│  ComplexityRouter                                                          │
+│  Memory读 → IntentAnalyzer → ClarificationChecker → ComplexityRouter         │
 │       ├─ ReAct（简单）                                                      │
-│       └─ Coordinator（复杂）                                                 │
+│       └─ Coordinator 子图（复杂；复用同一批 Tool）                              │
 │            Tools: query_schema / metric / validate_sql / execute_sql / chart │
-│            Guardrail → Sandbox → Repair → Compose                          │
+│            Guardrail → Sandbox → Repair → Compose → Memory写               │
 │            AuditLog (JSONL)  ⟂  agent_trace (SSE / UI)                     │
 └─────────────────────────────────────┬─────────────────────────────────────┘
                                       │
                     ┌─────────────────▼───────────────────┐
-                    │  SQLite：8 张业务表 + app_users        │
+                    │  SQLite：8 张业务表 + 应用表            │
+                    │  (账号 / session / 偏好 / 摘要)         │
                     └─────────────────────────────────────┘
 ```
 
 编排选型：**[LangGraph](https://github.com/langchain-ai/langgraph)**（状态图）+ **[LangChain](https://github.com/langchain-ai/langchain)**（LLM / Tools / Memory）。  
-SQL 安全为确定性独立模块，不使用黑盒 SQL Agent。
+SQL 安全为确定性独立模块，不使用黑盒 SQL Agent。  
+
+一页 Agent 架构图（16:9 浅色，不含前后端）：[`docs/architecture-16x9.html`](./docs/architecture-16x9.html) · 规格细节见 [`docs/03-Agent设计.md`](./docs/03-Agent设计.md)。
 
 官方文档：[LangGraph Docs](https://docs.langchain.com/oss/python/langgraph/overview) · [LangChain Docs](https://docs.langchain.com/oss/python/langchain/overview)
 
@@ -98,7 +110,7 @@ SQL 安全为确定性独立模块，不使用黑盒 SQL Agent。
 | 前端 | React · Vite · TypeScript · TailwindCSS · Recharts |
 | 后端 | Python · FastAPI · Pydantic · JWT · SSE |
 | Agent | [LangGraph](https://github.com/langchain-ai/langgraph) · [LangChain](https://github.com/langchain-ai/langchain) |
-| 数据 | SQLite（业务库 + 应用账号） |
+| 数据 | SQLite（8 张业务表 + 应用表） |
 | 模型 | OpenAI 兼容 API（`.env` 配置） |
 
 ---
@@ -107,16 +119,16 @@ SQL 安全为确定性独立模块，不使用黑盒 SQL Agent。
 
 - 自然语言经营分析（GMV、退款率、转化率、渠道 TopN 等）
 - 注册 / 登录；`admin` 需邀请码
-- SSE 流式 Trace、SQL、结果表、图表、结论
+- SSE 流式 Trace（含 `route_decision`）、SQL、结果表、图表、结论
 - analyst 只读 + 敏感字段拦截；admin 受控写（INSERT/UPDATE/DELETE）
-- Session 多轮追问 + 跨 Session 结构化长期记忆（无向量）
+- Session 多轮槽位 + 跨 Session「偏好 JSON + 最近摘要列表」（无向量）
 - 评测集与指标脚本
 
 ---
 
 ## 本地启动
 
-> 下列命令对应目标目录结构；若某模块尚未合入，以当前仓库状态为准。
+> 目标目录与命令如下；**模块未合入前无法启动**，请先按 `docs/06-开发计划.md` 实现 Phase 1+。
 
 ### 1. 环境变量
 
@@ -147,7 +159,7 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m app.db.init_db    # 初始化业务表 + app_users + 模拟数据
+python -m app.db.init_db    # 业务表 + 应用表 + 模拟数据
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -178,10 +190,11 @@ npm run dev
 |--|---------|--------|
 | 注册 | 直接注册 | 需 `ADMIN_INVITE_CODE` |
 | SELECT | 经营数据 OK | 全部业务字段 |
-| 敏感字段 | 拦截（如姓名等） | 允许 |
-| INSERT / UPDATE / DELETE | 禁止 | 允许（业务表） |
-| DROP / ALTER / 多语句 / 系统表 / `app_users` | 禁止 | 禁止 |
+| 敏感字段 | 拦截（`users.name/phone/email/id_card`） | 允许 |
+| INSERT / UPDATE / DELETE | 禁止 | 允许（**仅业务表**） |
+| DROP / ALTER / 多语句 / 系统表 / **全部应用表** | 禁止 | 禁止 |
 
+应用表包括：`app_users`、`chat_sessions`、`session_turns`、`user_preferences`、`user_analysis_summaries`。  
 角色来自服务端 JWT，**前端不可自行切换角色**。
 
 ---
@@ -191,7 +204,7 @@ npm run dev
 **Guardrail（执行前）**
 
 - 解析语句类型与涉及表字段  
-- 按角色允许 / 拒绝  
+- 按角色允许 / 拒绝；禁止访问全部应用表  
 - 明细查询补 `LIMIT`；写操作限制影响行数  
 - 不通过则阻断，不进沙箱  
 
@@ -202,6 +215,8 @@ npm run dev
 - 错误脱敏，不回传堆栈  
 - 写操作记入 AuditLog，Trace 标记高风险  
 
+**约束**：可演示 / 默认可运行路径上的 SQL **必须**经 Guardrail；开发期临时直连不得进入演示分支。
+
 ---
 
 ## Trace / AuditLog
@@ -210,7 +225,7 @@ npm run dev
 
 | 类型 | 用途 |
 |------|------|
-| `agent_trace` + SSE | 前端可解释展示（`node_*` / `tool_*`） |
+| `agent_trace` + SSE | 前端可解释展示（`node_*` / `tool_*` / `route_decision`） |
 | `AuditLog`（JSONL） | 排查、权限与写操作追溯 |
 
 关联字段：`request_id` · `trace_id` · `session_id` · `user_id` · `user_role`  
@@ -223,10 +238,10 @@ Tool 路径固定 PreToolUse → 执行 → PostToolUse；日志脱敏（密码�
 
 | 层 | 内容 | 存储 |
 |----|------|------|
-| Session | 近 N 轮槽位（指标、时间、过滤、SQL 摘要等） | 内存 + session 表 |
-| 用户长期 | 偏好、常用口径、历史分析摘要 | SQLite，按 `user_id` |
+| Session | 近 N 轮槽位（metrics / time_range / filters 等业务词） | 内存 + `chat_sessions` / `session_turns` |
+| 用户长期（轻量） | **偏好 JSON** + **最近摘要列表** | `user_preferences` / `user_analysis_summaries` |
 
-不做 embedding / 向量检索。敏感字段不入长期记忆。
+不做 embedding / 向量检索，不做复杂记忆产品。敏感字段不入长期记忆。
 
 ---
 
@@ -247,7 +262,7 @@ Tool 路径固定 PreToolUse → 执行 → PostToolUse；日志脱敏（密码�
 ## 评测
 
 ```text
-backend/app/eval/questions.json    # ≥30 条
+backend/app/eval/questions.json    # ≥30 条（含多轮 turns）
 backend/app/eval/run_eval.py
 backend/app/eval/eval_result.json  # 输出
 ```
@@ -259,6 +274,7 @@ backend/app/eval/eval_result.json  # 输出
 - `schema_hit_rate`
 - `permission_block_success_rate`
 - `average_latency_ms`
+- （可选）`route_match_rate`
 
 ```bash
 cd backend && python -m app.eval.run_eval
@@ -283,7 +299,7 @@ cd backend && python -m app.eval.run_eval
 | 场景 | 现象 | 处理 |
 |------|------|------|
 | 模糊指标 | 触发澄清，不盲生成 SQL | ClarificationChecker |
-| 危险 SQL | Guardrail 阻断 | analyst 写操作 / DDL |
+| 危险 SQL | Guardrail 阻断 | analyst 写操作 / DDL / 应用表 |
 | 执行报错 | 最多 1 次 Repair，再过 Guardrail | SQLRepairer |
 | 权限不足 | SSE `error` + AuditLog | 字段 / 角色策略 |
 
@@ -297,7 +313,7 @@ cd backend && python -m app.eval.run_eval
 - 接入真实企业数仓  
 - 更严格的语义评测  
 
-**不做**：真实支付 / 订单 / CRM 等外部业务系统接入。
+**不做**：真实支付 / 订单 / CRM 等外部业务系统接入；向量语义记忆；绕过 Guardrail 的第二套 SQL 路径。
 
 ---
 

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-DataInsight Agent — 电商经营分析 Agent。按 `docs/06-开发计划.md` 分阶段开发，主链路优先。
+data-analysis-agent — 电商经营分析 Agent。按 `docs/06-开发计划.md` 分阶段开发，主链路优先。
 
 ## 需求与文档
 

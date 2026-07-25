@@ -1,35 +1,57 @@
 # Agent 设计
 
-> 返回 [需求文档索引](./需求文档.md)
+> 返回 [需求文档索引](./需求文档.md) · 一页总览图：[architecture-16x9.html](./architecture-16x9.html)
 
 ## 1. Agent 主架构
 
 ### 1.1 架构选择
 
-本项目采用：
+本项目采用 **统一 LangGraph 入口 + 双模式执行**，SQL 安全模块两模式共用：
 
 ```text
-LangGraph 状态图
-  ├─ ComplexityRouter（规则优先）
-  ├─ 简单问题 → 单 Agent ReAct
-  │     观察 → 选 Tool → 执行 → 修复 → 回答
-  └─ 复杂问题 → Coordinator 多 Agent
-        ├─ Schema / Metric Agent
-        ├─ SQL Agent（生成 → Guardrail → 沙箱 → Repair）
-        ├─ Chart / Insight Agent
-        └─ Memory Agent（读写 Session + 用户长期记忆）
+/api/chat
+  → Memory 读入（Session 槽位 + 偏好 JSON / 最近摘要；两模式共用）
+  → IntentAnalyzer（轻量模型，结构化输出）
+       ├─ intent / slots / need_clarification
+       └─ route_mode: react | coordinator
+  → ClarificationChecker（若需澄清则 SSE 返回问题并 END）
+  → ComplexityRouter（规则可覆盖模型 route_mode）
+       ├─ react        → ReAct 子图（单 Agent 选 Tool 循环）
+       └─ coordinator  → Coordinator 子图（多步编排，复用同一批 Tool/节点）
+            ├─ Schema / Metric 步骤
+            ├─ SQL 步骤（生成 → Guardrail → 沙箱 → Repair）
+            └─ Chart / Insight 步骤
+  → AnswerComposer
+  → Memory 写回（更新 session_turns；成功则更新偏好 / 追加摘要）
+  → END
 ```
 
 分流原则：
 
-- 简单问题：单指标、单时间窗、路径清晰 → ReAct，降低延迟与轨迹噪音
-- 复杂问题：多指标对比、多步归因、跨域 JOIN、需多工具协作 → Coordinator
-- ComplexityRouter 以规则为主（关键词、intent、槽位完整度）；不确定时再轻量用模型判定
-- SQL 权限校验与沙箱执行为确定性独立模块，不交给模型仲裁，也不使用黑盒 SQL Agent
+- **简单（react）**：单指标、单时间窗、路径清晰 → ReAct，延迟低、轨迹好读
+- **复杂（coordinator）**：多指标对比、多步归因、跨域 JOIN、需多工具协作 → Coordinator 按固定/半固定步骤推进
+- **IntentAnalyzer 一次调用同时产出** `intent` 与建议 `route_mode`（见 2.1）；**规则可硬覆盖**（如明显单指标 TopN 强制 react；含「对比 / 归因 / 并且」等多信号强制 coordinator）
+- **记忆读写在主图两端、两模式共用**，不是 Coordinator 专属子 Agent
+- SQL 权限校验与沙箱为确定性独立模块，不交给模型仲裁，也不使用黑盒 SQL Agent
 
 技术选型：LangGraph 负责编排与状态流转，LangChain 负责 LLM / Tools / Memory 抽象。
 
-### 1.2 Agent 状态
+### 1.2 主图与 Tool 的关系（避免双路径）
+
+| 概念 | 职责 |
+|------|------|
+| LangGraph 节点 | 编排步骤（意图、澄清、路由、ReAct 循环体、Coordinator 各步、收尾） |
+| Tool Registry | 可调用能力的唯一入口（schema / metric / validate_sql / execute_sql / render_chart） |
+| Guardrail + Sandbox | Tool 内部或紧邻校验；**任何模式生成的 SQL 必须经同一路径** |
+
+约束：
+
+1. ReAct 与 Coordinator **不是两套 SQL 实现**：都调用同一批 Tool（及同一 Guardrail / Sandbox）
+2. Coordinator 的「子 Agent」= 主图上的**子图节点组**（可绑定更窄的 Tool 子集与 prompt），不是独立进程或旁路 API
+3. 图节点可直接调确定性模块（如 ClarificationChecker 规则），也经 Registry 调 Tool；**禁止**节点绕过 Registry 直连执行 SQL
+4. `agent_trace` / SSE 记录的是节点与 Tool 事件；AuditLog 挂在 Tool 钩子上
+
+### 1.3 Agent 状态
 
 定义统一状态对象 `AgentState`。
 
@@ -37,27 +59,44 @@ LangGraph 状态图
 
 ```python
 class AgentState:
+    # 请求与身份（鉴权注入）
     question: str
     session_id: str
+    user_id: str
     user_role: str
+    request_id: str
+    trace_id: str
 
-    intent: str | None
+    # 意图与分流（intent ≠ route_mode）
+    intent: str | None              # 业务类别枚举，见 2.1
+    intent_confidence: float | None
+    intent_summary: str | None
+    route_mode: str | None          # "react" | "coordinator"
+    route_source: str | None        # "model" | "rule_override"
+    slots: dict | None              # 粗槽位（业务词表，非库字段名）
+
+    # Schema / SQL / 结果
     relevant_tables: list[str]
     relevant_columns: dict
-
     generated_sql: str | None
     checked_sql: str | None
-
     columns: list[str]
     rows: list[dict]
+    affected_rows: int | None
 
     chart: dict | None
     answer: str | None
 
+    # 澄清与错误
     error: str | None
     repaired: bool
     need_clarification: bool
     clarification_question: str | None
+
+    # 记忆槽位（运行时合并结果）
+    session_slots: dict | None
+    user_preferences: dict | None
+    recent_summaries: list[dict] | None
 
     agent_trace: list[dict]
     latency_ms: int
@@ -69,9 +108,31 @@ class AgentState:
 
 ### 2.1 IntentAnalyzer
 
-作用：识别用户问题类型。
+作用：**入口轻量结构化理解**——产出业务意图、粗槽位、澄清标记，并**建议**执行模式。
 
-支持 intent：
+这是主链路第一个模型节点（也可用「规则兜底 + 轻量 LLM」）。
+
+#### 字段分工（勿混用）
+
+| 字段 | 含义 | 是否封闭枚举 |
+|------|------|--------------|
+| `intent` | **业务问题类别**（渠道分析 / 退款分析…），服务 Schema 裁剪与记忆过滤 | **是**（见下表 + `unknown`） |
+| `route_mode` | **编排路径**（`react` / `coordinator`） | 是（仅两值）；由本节点建议，ComplexityRouter 可覆盖 |
+| `slots` | **粗槽位**：业务层结构化条件（指标名、时间、维度…），**不是**库表字段名 | 槽位键固定；取值用**受控业务词表**（见下），不是全库列枚举 |
+| `need_clarification` | 缺关键信息、会影响 SQL 时先问用户，本轮不跑 SQL | 布尔 |
+
+同一 `intent` 既可以很简单也可以很复杂；**禁止**用 `intent` 枚举值直接决定 ReAct / Coordinator。
+
+#### 主要做什么
+
+1. **业务意图分类**（封闭枚举 + `unknown`）
+2. **建议 `route_mode`**（与 intent 分开输出）
+3. **抽取粗槽位 `slots`**（便于澄清、多轮合并、给 SchemaRetriever 信号）
+4. **标记 `need_clarification`**（细规则可由 ClarificationChecker 二次判定）
+
+#### intent：封闭枚举（不随表增多而膨胀）
+
+意图是粗分类，**不是**「每一种问法一个类型」。表变多时通常仍落在现有类别；新分析域才加枚举项。
 
 - sales_analysis
 - product_analysis
@@ -80,67 +141,149 @@ class AgentState:
 - refund_analysis
 - conversion_analysis
 - payment_analysis
-- unknown
+- write_op（admin 受控写意图；analyst 出现时应在后续被权限阻断）
+- unknown（落不到类里时使用；默认偏 `react`，除非规则判定复杂）
 
-输出：
+#### slots：要，但是「薄词表」，不是全库字段
 
-- intent
-- confidence
-- summary
+**需要 slots**：没有槽位也能 NL2SQL，但多轮追问、澄清、默认口径会变糊。
 
-实现建议：
+slots 枚举的是**经营分析业务概念**，不是数据库列全集。表/列变多时：
 
-- 可以用规则 + LLM
-- 第一版可以先用规则，后续再接 LLM
+- Intent 阶段的 metrics / dimensions 词表**不必**跟着暴涨
+- 列级映射放到 SchemaRetriever（`gmv` → `sum(orders.pay_amount)`）
+- 词表外说法：`metrics: []` 或无法映射时触发澄清 / 交后续节点处理
+
+第一版受控词表（实现时可放常量文件，随产品少量增补）：
+
+```text
+metrics:
+  gmv | order_count | aov | refund_rate | conversion_rate |
+  payment_success_rate | profit | profit_rate
+
+time_range:
+  last_7d | last_30d | last_month | last_quarter | this_month | last_90d
+
+group_by / dimensions:
+  channel | province | city | category | brand | payment_method
+
+其他槽位键:
+  top_n: int | null
+  write_intent: bool
+  filters: 可选，仅粗粒度（如 region=华东），不写具体列名
+```
+
+#### Prompt 约束（Intent 阶段禁止灌全库 Schema）
+
+IntentAnalyzer 的 prompt **只放**：
+
+- intent 枚举说明
+- slots 受控词表与输出 JSON schema
+- 分流提示（单指标 TopN → react；多指标/归因 → coordinator）
+- 常见默认口径说明（如 GMV 默认支付金额，不必因此澄清）
+- 用户问题（及可选：当前 session 槽位摘要）
+
+**禁止**在本阶段放入：全部表结构、全部列名、样例行。全量/相关 Schema 仅出现在 SchemaRetriever / SQLGenerator。
+
+#### 结构化输出示例
+
+用户问题：`上个月 GMV 最高的 5 个渠道是什么？`
+
+```json
+{
+  "intent": "channel_analysis",
+  "confidence": 0.92,
+  "summary": "按渠道汇总上月 GMV，取 Top5",
+  "route_mode": "react",
+  "slots": {
+    "metrics": ["gmv"],
+    "time_range": "last_month",
+    "group_by": ["channel"],
+    "top_n": 5,
+    "write_intent": false
+  },
+  "need_clarification": false,
+  "clarification_question": null
+}
+```
+
+歧义示例：`最近哪个渠道表现最好？` → `metrics` 为空、`time_range` 为空、`need_clarification=true`，并给出具体澄清问句（问清指标与时间），不跑 SQL。
+
+#### 实现建议
+
+- 优先：**一次轻量模型调用**产出上表结构（延迟友好）
+- 规则覆盖：ComplexityRouter 在模型之后运行，对高置信规则命中可改写 `route_mode`，并设 `route_source=rule_override`
+- 模型失败或 `unknown` 时：默认 `react`；明显多步关键词再升为 `coordinator`
+- 代码内维护 `METRIC_VOCAB` / `DIMENSION_VOCAB`；与 2.4 口径表通过 metric key 关联，避免 Intent prompt 写死 SQL 表达式
 
 ### 2.2 ClarificationChecker
 
-作用：判断问题是否存在明显歧义。
+作用：判断问题是否存在明显歧义；为真时请用户**补充/明确缺失信息**（不是笼统「请重新确认」）。
 
 需要澄清的情况：
 
-- “表现最好”没有说明指标
-- “最近”没有具体时间范围
-- “转化率”没有说明口径
+- “表现最好”没有说明指标（slots.metrics 为空）
+- “最近”没有具体时间范围（且无默认可用）
+- “转化率”没有说明口径且词表/默认不足以消歧
 - “用户质量”这类概念没有定义
+- 指标落在词表外且无法可靠映射
 
 注意：
 
-- GMV 默认定义为 `orders.pay_amount`
-- 常见指标有默认口径时不必频繁反问
+- GMV 等常见指标有默认口径时不必频繁反问
 - 只有会明显影响 SQL 的歧义才反问
+- 若 IntentAnalyzer 已给出 `need_clarification=true`，本节点可直接确认或按规则收紧/放宽
+- 澄清问句应点名缺失项（指标？时间？维度？）
 
 输出示例：
 
 ```json
 {
   "need_clarification": true,
-  "clarification_question": "你想按订单金额还是支付金额统计 GMV？"
+  "clarification_question": "「表现最好」想按 GMV、订单量还是客单价？时间用最近 7 天还是 30 天？"
 }
 ```
 
-### 2.3 SchemaRetriever
+澄清为真时：图直接结束，SSE 推送澄清问题，不进入 SQL 生成。
 
-作用：根据问题选择相关表和字段。
+### 2.3 ComplexityRouter
+
+作用：最终决定走 ReAct 还是 Coordinator（确定性节点，可不调模型）。
+
+输入：IntentAnalyzer 的 **`route_mode`（不是 intent）**、槽位、关键词特征。
+
+规则示例（可落地为代码）：
+
+| 条件 | route_mode |
+|------|------------|
+| 单指标 + 单时间窗 + 单分组/TopN | react |
+| 多指标、同比环比、归因、多表跨域（订单+流量+退款等） | coordinator |
+| 模型建议与规则冲突 | **以规则为准**，写 `route_source=rule_override` |
+
+### 2.4 SchemaRetriever
+
+作用：把「intent + slots 业务词」落地为**相关表/字段**；本阶段才注入裁剪后的 Schema。
 
 要求：
 
-- 不把全量 Schema 全部塞给模型
-- 根据 intent、关键词、指标口径选择相关表
+- 不把全量 Schema 全部塞给模型；按 intent、slots.metrics / group_by、关键词选择相关表
+- 将 slots 中的 metric key **映射**为 SQL 口径与所需列（见下表）
 - 输出 relevant_tables 和 relevant_columns
-- 支持指标口径映射
+- **不返回**应用表（`app_users`、`chat_sessions` 等）
+- 表变大时优先加强本节点的召回/裁剪，而不是扩大 Intent 词表去枚举所有列
 
-指标口径：
+指标口径（第一版约定；key 与 Intent `METRIC_VOCAB` 对齐）：
 
-- GMV = sum(orders.pay_amount)
-- 订单量 = count(orders.id)
-- 客单价 = sum(orders.pay_amount) / count(orders.id)
-- 退款率 = count(refunds.id) / count(orders.id)
-- 支付成功率 = success_payments / total_payments
-- 转化率 = conversion_sessions / total_sessions
-- 利润 = sum(order_items.unit_price - products.cost)
+- gmv / GMV = `sum(orders.pay_amount)`（可按时间/状态过滤，默认已支付口径在实现里注明）
+- order_count / 订单量 = `count(distinct orders.id)`
+- aov / 客单价 = `sum(orders.pay_amount) / count(distinct orders.id)`
+- refund_rate / 退款率 = `count(distinct refunds.order_id) / count(distinct orders.id)`（同一时间窗内；实现对齐时间条件）
+- payment_success_rate / 支付成功率 = `count(payments where status=success) / count(payments)`（同一时间窗）
+- conversion_rate / 转化率 = `count(distinct session_id where is_conversion=1) / count(distinct session_id)`（`traffic_logs`）
+- profit / 利润 = `sum( (order_items.unit_price - products.cost) * order_items.quantity - order_items.discount_amount )`（需 JOIN `products`）
+- profit_rate / 利润率 = 利润 / `sum(order_items.unit_price * order_items.quantity - order_items.discount_amount)`（分母为销售额，避免除零）
 
-### 2.4 SQLGenerator
+### 2.5 SQLGenerator
 
 作用：生成 SQLite SQL。
 
@@ -155,7 +298,7 @@ class AgentState:
   - `admin`：可生成 `SELECT` / `WITH` / `INSERT` / `UPDATE` / `DELETE`；写操作须有明确用户意图
 - 不生成 DDL（`DROP` / `ALTER` / `TRUNCATE` / `CREATE`）
 
-### 2.5 SQLGuardrail
+### 2.6 SQLGuardrail
 
 作用：SQL 安全与权限校验。
 
@@ -163,7 +306,7 @@ class AgentState:
 
 - 禁止多语句执行
 - 禁止 `DROP`、`ALTER`、`TRUNCATE`、`CREATE` 及访问系统表（如 `sqlite_master`）
-- 禁止改写应用账号表 `app_users`
+- 禁止访问或改写**全部应用表**（`app_users`、`chat_sessions`、`session_turns`、`user_preferences`、`user_analysis_summaries`）
 - 明细 `SELECT` 自动追加 `LIMIT 100`；写操作限制影响行数上限
 - SQL 不安全时直接阻断，不进入执行阶段
 - `user_role` 来自鉴权用户，不信任请求体自报角色
@@ -187,9 +330,9 @@ admin：
 
 - 可以查询全部业务字段（含敏感字段）
 - 允许对业务表执行 `INSERT` / `UPDATE` / `DELETE`
-- 仍禁止 DDL、多语句、系统表、`app_users`
+- 仍禁止 DDL、多语句、系统表、全部应用表
 
-### 2.6 SQLSandboxExecutor
+### 2.7 SQLSandboxExecutor
 
 作用：在受控环境中执行 SQL。
 
@@ -205,9 +348,9 @@ admin：
 
 说明：
 
-本项目只实现 SQL 沙箱，不实现通用代码沙箱。
+本项目只实现 SQL 沙箱，不实现通用代码沙箱。SQLite 约定：短事务、写操作串行、执行超时，避免与 SSE 长连接互相拖死。
 
-### 2.7 SQLRepairer
+### 2.8 SQLRepairer
 
 作用：当 SQL 执行失败时自动修复。
 
@@ -222,7 +365,7 @@ admin：
 - 修复后的 SQL 必须重新经过 SQLGuardrail
 - 修复失败则返回清晰错误说明
 
-### 2.8 ChartPlanner
+### 2.9 ChartPlanner
 
 作用：根据查询结果规划图表。
 
@@ -244,7 +387,7 @@ admin：
 }
 ```
 
-### 2.9 AnswerComposer
+### 2.10 AnswerComposer
 
 作用：生成中文分析结论。
 
@@ -274,35 +417,32 @@ admin：
 
 ### 3.2 第一版内置 Tools
 
-建议封装 5 个 Tool。
+建议封装 5 个 Tool（ReAct / Coordinator **共用**）。
 
 #### query_schema
 
-用途：查询数据库表结构和字段说明。
+用途：查询业务表结构和字段说明（不含应用表；analyst 可隐藏敏感字段元数据）。
 
 #### retrieve_metric_definition
 
-用途：查询业务指标口径。
-
-示例：
-
-- GMV
-- 客单价
-- 退款率
-- 转化率
-- 支付成功率
+用途：查询业务指标口径（与 2.4 口径表一致）。
 
 #### validate_sql
 
-用途：执行 SQL 安全校验和权限校验。
+用途：执行 SQL 安全校验和权限校验（封装 SQLGuardrail）。
 
 #### execute_sql
 
-用途：执行通过校验的只读 SQL。
+用途：执行**已通过** `validate_sql` 的 SQL（只读或 admin 受控写）。
+
+- 内部必须再次（或信任紧前校验结果并强制顺序）走沙箱
+- `SELECT` / `WITH`：`risk_level=medium`
+- `INSERT` / `UPDATE` / `DELETE`：`risk_level=high`，且仅 `admin`；写失败/成功均打 AuditLog
+- 描述勿写死 “read-only”；按语句类型区分风险
 
 #### render_chart
 
-用途：生成图表配置。
+用途：生成图表配置（封装 ChartPlanner 或共享其逻辑）。
 
 ### 3.3 Tool 元数据
 
@@ -311,7 +451,7 @@ admin：
 ```json
 {
   "name": "execute_sql",
-  "description": "Execute read-only SQL in sandbox",
+  "description": "Execute validated SQL in sandbox (read or admin controlled write)",
   "input_schema": {},
   "risk_level": "medium",
   "permission_policy": "allow_after_validation",
@@ -323,7 +463,7 @@ admin：
 
 - low：查询 schema、查询指标口径
 - medium：执行只读 SQL、生成图表
-- high：未来外部 API 调用、大批量导出
+- high：受控写 SQL、未来外部 API、大批量导出
 
 权限策略：
 
@@ -394,6 +534,7 @@ admin：
 - `guardrail_deny`
 - `sql_repair`
 - `auth_fail` / `permission_deny`
+- `route_decision`（记录 `route_mode` 与 `route_source`）
 
 ### 4.4 Tool 钩子
 
@@ -421,18 +562,26 @@ SQL 可记 fingerprint 或截断文本；大结果集只记行列数与样例行
 - AuditLog 可比前端展示更全，但字段需脱敏
 - 前端 Trace 面板不直接读磁盘日志，只消费 SSE / 最终汇总
 
+### 4.7 错误与中断收尾
+
+| 情况 | 图行为 | SSE |
+|------|--------|-----|
+| 需要澄清 | 跳过 SQL，END | `answer` 或专用字段带 `clarification_question`，然后 `done` |
+| Guardrail 拒绝 | END | `error`（可展示原因）+ `done` |
+| 修复 1 次仍失败 | END | `error` + `done`（`repaired` 按实际） |
+| 成功 | AnswerComposer → END | `sql` / `rows` / `chart` / `answer` + `done` |
+
 ---
 
 ## 5. 记忆管理
 
-实现分层记忆：**Session（工作记忆）+ 跨 Session 结构化长期记忆**。不做向量库 / embedding 语义检索。
+实现分层记忆：**Session 槽位 + 跨 Session「偏好 JSON + 最近摘要列表」**。不做向量库 / embedding，不做复杂记忆产品（无自动实体图谱、无多跳记忆推理）。
+
+挂载位置：主图 **入口读、出口写**（见 §1.1），ReAct / Coordinator **共用**；不要做成 Coordinator 内部专属「Memory Agent」。
 
 ### 5.1 Session Memory（工作记忆）
 
-用途：
-
-- 支持多轮追问
-- 保存最近分析上下文与槽位
+用途：支持多轮追问，保存最近分析上下文与槽位。
 
 示例：
 
@@ -446,12 +595,14 @@ SQL 可记 fingerprint 或截断文本；大结果集只记行列数与样例行
 
 Agent 应继承上一轮的指标、时间范围和分组方式，并增加地区过滤条件。
 
-Session 保存字段：
+持久化：见 [02-数据库设计](./02-数据库设计.md) 的 `chat_sessions` / `session_turns`。
+
+运行时槽位字段（与 Intent `slots` 对齐的业务层键，持久化时可直接存 JSON）：
 
 - last_question
 - last_intent
 - last_sql
-- last_metrics
+- last_metrics（如 `["gmv"]`，词表 key）
 - last_time_range
 - last_filters
 - last_group_by
@@ -459,24 +610,21 @@ Session 保存字段：
 
 要求：
 
-- 按 `session_id` 隔离
-- 每个 session 保留最近 N 轮（建议默认 10）
-- 可用内存缓存 + SQLite session 表持久化
+- 按 `session_id`（且归属 `user_id`）隔离
+- 每个 session 保留最近 N 轮（默认 10）
+- 可用内存缓存 + SQLite 持久化
 
-### 5.2 User Long-term Memory（跨 Session，结构化）
+### 5.2 User Long-term Memory（跨 Session，轻量）
 
-用途：跨会话复用用户偏好与历史分析结论，避免每次从零开始。
+形态固定为两块，避免做成半套记忆平台：
 
-持久化内容（SQLite，按 `user_id`）：
-
-- 用户偏好：默认时间窗、常用维度、常用图表类型、角色
-- 常用口径：用户确认或高频使用的指标定义（如 GMV 口径）
-- 历史分析摘要：问题摘要、关键结论、所用指标/过滤条件、对应 session 引用
+1. **`user_preferences.preferences_json`**：默认时间窗、常用维度、常用图表、指标口径覆盖
+2. **`user_analysis_summaries` 最近 M 条摘要列表**：问题摘要、结论摘要、指标/过滤、session 引用
 
 读写约定：
 
-- 追问：先合并当前 Session 槽位；需要时再读取该用户的偏好与近期摘要增强上下文
-- 一轮分析结束后：写回/更新摘要与偏好（可异步）
-- 检索方式：按 `user_id` + 字段/关键词匹配（intent、metric、时间范围等），**不做 embedding 向量检索**
-- 敏感字段（姓名、手机、邮箱、身份证等）不得写入长期记忆
-- 按 `user_id` / `session_id` 隔离；支持清理与上限（例如每用户保留最近 M 条摘要）
+- 追问：先合并当前 Session 槽位；再读取该用户偏好 JSON + 最近摘要列表（例如最近 5 条）增强上下文
+- 一轮分析成功结束后：更新偏好（可简单合并）、追加一条摘要（可异步）
+- 检索：按 `user_id` 取列表 / 读 JSON，可选关键词过滤；**不做 embedding**
+- 敏感字段不得写入
+- 支持清理与上限（偏好单行覆盖写；摘要保留最近 M 条）

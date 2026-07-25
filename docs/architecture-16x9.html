@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>data-analysis-agent · LangGraph 节点图</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;600;700;800&family=Quicksand:wght@600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --paper: #F7F9FC;
+      --surface: #FFFFFF;
+      --ink: #15202B;
+      --mute: #5E6E80;
+      --line: #D7E1EC;
+      --line-soft: #E9F0F6;
+      --teal: #0F6E62;
+      --teal-soft: #E5F4F1;
+      --blue: #1E5A96;
+      --blue-soft: #E7F1FA;
+      --amber: #A35B12;
+      --amber-soft: #F8EFE4;
+      --danger: #9B2C2C;
+      --danger-soft: #F8EAEA;
+      --violet: #4A5D8C;
+      --shadow: 0 1px 0 rgba(21, 32, 43, 0.04), 0 14px 36px rgba(30, 60, 90, 0.07);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(1100px 560px at 8% -8%, #EAF3F8 0%, transparent 55%),
+        radial-gradient(800px 480px at 100% 0%, #E8F4F0 0%, transparent 50%),
+        var(--paper);
+      color: var(--ink);
+      font-family: Nunito, "PingFang SC", "Microsoft YaHei", sans-serif;
+      padding: 20px;
+    }
+
+    .stage {
+      width: min(100vw - 40px, 1440px);
+      aspect-ratio: 16 / 9;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .stage::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image: radial-gradient(circle at 1px 1px, #E4ECF4 1px, transparent 0);
+      background-size: 22px 22px;
+      opacity: 0.45;
+      pointer-events: none;
+    }
+
+    .header, .graph-wrap, .bottom { position: relative; z-index: 1; }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 22px 8px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .brand-mark {
+      font-family: Quicksand, Nunito, sans-serif;
+      font-weight: 700;
+      font-size: clamp(18px, 1.9vw, 26px);
+      letter-spacing: -0.03em;
+    }
+
+    .brand-mark span { color: var(--teal); }
+
+    .thesis {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--mute);
+      margin-top: 2px;
+    }
+
+    .meta {
+      text-align: right;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--mute);
+      line-height: 1.4;
+    }
+
+    .meta strong {
+      display: block;
+      font-family: Quicksand, Nunito, sans-serif;
+      color: var(--ink);
+      font-size: 12px;
+    }
+
+    .graph-wrap {
+      padding: 8px 14px 4px;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .graph-wrap h2 {
+      font-family: Quicksand, Nunito, sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 0 4px;
+    }
+
+    .graph-wrap h2 em {
+      font-style: normal;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--mute);
+    }
+
+    .graph {
+      flex: 1;
+      width: 100%;
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: linear-gradient(180deg, #FCFDFE 0%, #F4F8FB 100%);
+    }
+
+    .graph text {
+      font-family: Nunito, "PingFang SC", sans-serif;
+      fill: var(--ink);
+    }
+
+    .bottom {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1.35fr;
+      gap: 8px;
+      padding: 6px 16px 12px;
+      align-items: stretch;
+    }
+
+    .mode {
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      padding: 7px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .mode.react { border-left: 3px solid var(--blue); }
+    .mode.coord { border-left: 3px solid var(--teal); }
+
+    .mode h3 {
+      font-family: Quicksand, Nunito, sans-serif;
+      font-size: 12px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .mode h3 em {
+      font-style: normal;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 7px;
+      border-radius: 999px;
+      background: var(--paper);
+      color: var(--mute);
+      border: 1px solid var(--line-soft);
+    }
+
+    .mode p {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--mute);
+      line-height: 1.35;
+    }
+
+    .shared {
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(247, 249, 252, 0.95);
+      padding: 7px 10px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px 10px;
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--mute);
+      line-height: 1.35;
+    }
+
+    .shared b { color: var(--ink); font-weight: 800; }
+    .shared .g b { color: var(--danger); }
+
+    @media (max-width: 900px) {
+      body { padding: 10px; place-items: start center; }
+      .stage { width: 100%; aspect-ratio: auto; min-height: 720px; }
+      .bottom { grid-template-columns: 1fr; }
+      .header { flex-direction: column; align-items: flex-start; }
+      .meta { text-align: left; }
+    }
+
+    @media print {
+      body { background: white; padding: 0; }
+      .stage { width: 100%; border-radius: 0; box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="stage" role="img" aria-label="LangGraph Agent 节点架构图">
+    <header class="header">
+      <div>
+        <div class="brand-mark">LangGraph <span>Node Graph</span></div>
+        <p class="thesis">每个圆角块 = 一个图节点；实线 = 主边，虚线 = 条件边 / 修复环。</p>
+      </div>
+      <div class="meta">
+        <strong>data-analysis-agent · 16:9</strong>
+        主图节点展开 · 子图压缩标注
+      </div>
+    </header>
+
+    <div class="graph-wrap">
+      <h2>
+        主编排 StateGraph
+        <em>START → … → END · Clarification / Repair 为条件边</em>
+      </h2>
+
+      <!-- viewBox tuned for 16:9 content area -->
+      <svg class="graph" viewBox="0 0 1280 620" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#7A8B9C" />
+          </marker>
+          <marker id="arrow-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#0F6E62" />
+          </marker>
+          <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#A35B12" />
+          </marker>
+          <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="1" stdDeviation="1.2" flood-color="#15202B" flood-opacity="0.06" />
+          </filter>
+        </defs>
+
+        <!-- ===== Edges (drawn first) ===== -->
+        <!-- Row 1 spine -->
+        <path d="M 78 72 H 150" stroke="#7A8B9C" stroke-width="2" fill="none" marker-end="url(#arrow)" />
+        <path d="M 278 72 H 320" stroke="#7A8B9C" stroke-width="2" fill="none" marker-end="url(#arrow)" />
+        <path d="M 488 72 H 530" stroke="#7A8B9C" stroke-width="2" fill="none" marker-end="url(#arrow)" />
+        <path d="M 698 72 H 740" stroke="#7A8B9C" stroke-width="2" fill="none" marker-end="url(#arrow)" />
+
+        <!-- Clarification → END (need clarify) -->
+        <path d="M 824 48 C 920 20, 1000 20, 1088 48" stroke="#A35B12" stroke-width="2" fill="none" stroke-dasharray="6 4" marker-end="url(#arrow-amber)" />
+        <text x="930" y="28" font-size="11" font-weight="700" fill="#A35B12">need_clarification</text>
+
+        <!-- Clarification → Router -->
+        <path d="M 824 96 V 140 H 640 V 168" stroke="#7A8B9C" stroke-width="2" fill="none" marker-end="url(#arrow)" />
+        <text x="830" y="128" font-size="11" font-weight="700" fill="#5E6E80">ok</text>
+
+        <!-- Router → ReAct -->
+        <path d="M 560 208 V 248" stroke="#1E5A96" stroke-width="2" fill="none" marker-end="url(#arrow)" />
+        <text x="500" y="238" font-size="11" font-weight="800" fill="#1E5A96">react</text>
+
+        <!-- Router → Coordinator -->
+        <path d="M 720 208 V 248" stroke="#0F6E62" stroke-width="2" fill="none" marker-end="url(#arrow)" />
+        <text x="730" y="238" font-size="11" font-weight="800" fill="#0F6E62">coordinator</text>
+
+        <!-- ReAct internal edges -->
+        <path d="M 220 310 H 268" stroke="#7A8B9C" stroke-width="1.5" fill="none" marker-end="url(#arrow)" />
+        <path d="M 388 310 H 436" stroke="#7A8B9C" stroke-width="1.5" fill="none" marker-end="url(#arrow)" />
+        <!-- ReAct loop back -->
+        <path d="M 496 288 C 520 250, 180 250, 204 288" stroke="#1E5A96" stroke-width="1.5" fill="none" stroke-dasharray="5 3" marker-end="url(#arrow)" />
+        <text x="300" y="262" font-size="10" font-weight="700" fill="#1E5A96">继续选 Tool</text>
+
+        <!-- Coordinator chain -->
+        <path d="M 700 310 H 728" stroke="#7A8B9C" stroke-width="1.5" fill="none" marker-end="url(#arrow)" />
+        <path d="M 848 310 H 876" stroke="#7A8B9C" stroke-width="1.5" fill="none" marker-end="url(#arrow)" />
+        <path d="M 996 310 H 1024" stroke="#7A8B9C" stroke-width="1.5" fill="none" marker-end="url(#arrow)" />
+        <path d="M 1144 310 H 1160" stroke="#7A8B9C" stroke-width="1.5" fill="none" marker-end="url(#arrow)" />
+
+        <!-- Sandbox → Repair (fail) -->
+        <path d="M 1084 348 V 400 H 950 V 348" stroke="#9B2C2C" stroke-width="1.5" fill="none" stroke-dasharray="5 3" marker-end="url(#arrow)" />
+        <text x="1000" y="392" font-size="10" font-weight="700" fill="#9B2C2C">exec error · ×1</text>
+
+        <!-- Repair → Guardrail again -->
+        <path d="M 890 348 V 328" stroke="#9B2C2C" stroke-width="1.5" fill="none" stroke-dasharray="5 3" marker-end="url(#arrow)" />
+        <text x="800" y="370" font-size="10" font-weight="700" fill="#9B2C2C">re-validate</text>
+
+        <!-- Chart → Answer merge from both modes -->
+        <path d="M 1220 330 V 470 H 700" stroke="#0F6E62" stroke-width="2" fill="none" marker-end="url(#arrow-teal)" />
+        <path d="M 350 358 V 430 H 560 V 470" stroke="#1E5A96" stroke-width="2" fill="none" marker-end="url(#arrow)" />
+
+        <!-- Answer → MemorySave → END -->
+        <path d="M 760 508 H 860" stroke="#7A8B9C" stroke-width="2" fill="none" marker-end="url(#arrow)" />
+        <path d="M 1020 508 H 1120" stroke="#7A8B9C" stroke-width="2" fill="none" marker-end="url(#arrow)" />
+
+        <!-- ===== Nodes ===== -->
+        <!-- START -->
+        <g filter="url(#soft)">
+          <rect x="20" y="48" width="58" height="48" rx="24" fill="#15202B" />
+          <text x="49" y="76" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">START</text>
+        </g>
+
+        <!-- MemoryLoad -->
+        <g filter="url(#soft)">
+          <rect x="150" y="40" width="128" height="64" rx="14" fill="#fff" stroke="#0F6E62" stroke-width="2" />
+          <text x="214" y="66" text-anchor="middle" font-size="13" font-weight="800">MemoryLoad</text>
+          <text x="214" y="86" text-anchor="middle" font-size="10" font-weight="600" fill="#5E6E80">session · prefs · summaries</text>
+        </g>
+
+        <!-- IntentAnalyzer -->
+        <g filter="url(#soft)">
+          <rect x="320" y="40" width="168" height="64" rx="14" fill="#fff" stroke="#1E5A96" stroke-width="2" />
+          <text x="404" y="66" text-anchor="middle" font-size="13" font-weight="800">IntentAnalyzer</text>
+          <text x="404" y="86" text-anchor="middle" font-size="10" font-weight="600" fill="#5E6E80">intent · slots · route_mode</text>
+        </g>
+
+        <!-- ClarificationChecker -->
+        <g filter="url(#soft)">
+          <rect x="530" y="40" width="168" height="64" rx="14" fill="#fff" stroke="#A35B12" stroke-width="2" />
+          <text x="614" y="66" text-anchor="middle" font-size="13" font-weight="800">ClarificationChecker</text>
+          <text x="614" y="86" text-anchor="middle" font-size="10" font-weight="600" fill="#5E6E80">歧义？问清 / 放行</text>
+        </g>
+
+        <!-- ComplexityRouter -->
+        <g filter="url(#soft)">
+          <rect x="560" y="168" width="160" height="40" rx="12" fill="#fff" stroke="#4A5D8C" stroke-width="2" />
+          <text x="640" y="193" text-anchor="middle" font-size="13" font-weight="800">ComplexityRouter</text>
+        </g>
+
+        <!-- END clarify -->
+        <g filter="url(#soft)">
+          <rect x="1088" y="40" width="72" height="48" rx="24" fill="#F8EFE4" stroke="#A35B12" stroke-width="2" />
+          <text x="1124" y="60" text-anchor="middle" font-size="11" font-weight="800" fill="#A35B12">END</text>
+          <text x="1124" y="76" text-anchor="middle" font-size="9" font-weight="700" fill="#A35B12">澄清</text>
+        </g>
+
+        <!-- ReAct subgraph frame -->
+        <rect x="40" y="248" width="500" height="130" rx="16" fill="#E7F1FA" fill-opacity="0.55" stroke="#1E5A96" stroke-width="1.5" stroke-dasharray="5 4" />
+        <text x="56" y="270" font-size="11" font-weight="800" fill="#1E5A96">subgraph · ReAct</text>
+
+        <g filter="url(#soft)">
+          <rect x="56" y="284" width="148" height="52" rx="12" fill="#fff" stroke="#1E5A96" stroke-width="1.5" />
+          <text x="130" y="306" text-anchor="middle" font-size="12" font-weight="800">ReActAgent</text>
+          <text x="130" y="324" text-anchor="middle" font-size="9" font-weight="600" fill="#5E6E80">观察 · 选 Tool</text>
+        </g>
+        <g filter="url(#soft)">
+          <rect x="268" y="284" width="120" height="52" rx="12" fill="#fff" stroke="#1E5A96" stroke-width="1.5" />
+          <text x="328" y="306" text-anchor="middle" font-size="12" font-weight="800">ToolNode</text>
+          <text x="328" y="324" text-anchor="middle" font-size="9" font-weight="600" fill="#5E6E80">Registry 调用</text>
+        </g>
+        <g filter="url(#soft)">
+          <rect x="436" y="284" width="88" height="52" rx="12" fill="#fff" stroke="#1E5A96" stroke-width="1.5" />
+          <text x="480" y="314" text-anchor="middle" font-size="12" font-weight="800">Join</text>
+        </g>
+
+        <!-- Coordinator subgraph frame -->
+        <rect x="560" y="248" width="700" height="180" rx="16" fill="#E5F4F1" fill-opacity="0.5" stroke="#0F6E62" stroke-width="1.5" stroke-dasharray="5 4" />
+        <text x="576" y="270" font-size="11" font-weight="800" fill="#0F6E62">subgraph · Coordinator</text>
+
+        <g filter="url(#soft)">
+          <rect x="576" y="284" width="124" height="52" rx="12" fill="#fff" stroke="#0F6E62" stroke-width="1.5" />
+          <text x="638" y="306" text-anchor="middle" font-size="11" font-weight="800">SchemaRetriever</text>
+          <text x="638" y="324" text-anchor="middle" font-size="9" font-weight="600" fill="#5E6E80">表字段 · 口径</text>
+        </g>
+        <g filter="url(#soft)">
+          <rect x="728" y="284" width="120" height="52" rx="12" fill="#fff" stroke="#0F6E62" stroke-width="1.5" />
+          <text x="788" y="306" text-anchor="middle" font-size="11" font-weight="800">SQLGenerator</text>
+          <text x="788" y="324" text-anchor="middle" font-size="9" font-weight="600" fill="#5E6E80">只出 SQL</text>
+        </g>
+        <g filter="url(#soft)">
+          <rect x="876" y="284" width="120" height="52" rx="12" fill="#fff" stroke="#9B2C2C" stroke-width="1.5" />
+          <text x="936" y="306" text-anchor="middle" font-size="11" font-weight="800">SQLGuardrail</text>
+          <text x="936" y="324" text-anchor="middle" font-size="9" font-weight="600" fill="#5E6E80">权限 · 安全</text>
+        </g>
+        <g filter="url(#soft)">
+          <rect x="1024" y="284" width="120" height="52" rx="12" fill="#fff" stroke="#9B2C2C" stroke-width="1.5" />
+          <text x="1084" y="306" text-anchor="middle" font-size="11" font-weight="800">SQLSandbox</text>
+          <text x="1084" y="324" text-anchor="middle" font-size="9" font-weight="600" fill="#5E6E80">受控执行</text>
+        </g>
+        <g filter="url(#soft)">
+          <rect x="1160" y="284" width="84" height="52" rx="12" fill="#fff" stroke="#0F6E62" stroke-width="1.5" />
+          <text x="1202" y="306" text-anchor="middle" font-size="11" font-weight="800">Chart</text>
+          <text x="1202" y="324" text-anchor="middle" font-size="9" font-weight="600" fill="#5E6E80">Planner</text>
+        </g>
+        <g filter="url(#soft)">
+          <rect x="890" y="400" width="120" height="40" rx="12" fill="#F8EAEA" stroke="#9B2C2C" stroke-width="1.5" />
+          <text x="950" y="424" text-anchor="middle" font-size="11" font-weight="800" fill="#9B2C2C">SQLRepairer</text>
+        </g>
+
+        <!-- AnswerComposer -->
+        <g filter="url(#soft)">
+          <rect x="560" y="470" width="200" height="76" rx="14" fill="#fff" stroke="#15202B" stroke-width="2" />
+          <text x="660" y="502" text-anchor="middle" font-size="14" font-weight="800">AnswerComposer</text>
+          <text x="660" y="524" text-anchor="middle" font-size="10" font-weight="600" fill="#5E6E80">中文结论 · 不编造</text>
+        </g>
+
+        <!-- MemorySave -->
+        <g filter="url(#soft)">
+          <rect x="860" y="482" width="160" height="52" rx="14" fill="#fff" stroke="#0F6E62" stroke-width="2" />
+          <text x="940" y="504" text-anchor="middle" font-size="13" font-weight="800">MemorySave</text>
+          <text x="940" y="522" text-anchor="middle" font-size="10" font-weight="600" fill="#5E6E80">槽位 · 摘要写回</text>
+        </g>
+
+        <!-- END -->
+        <g filter="url(#soft)">
+          <rect x="1120" y="482" width="72" height="52" rx="26" fill="#15202B" />
+          <text x="1156" y="512" text-anchor="middle" font-size="13" font-weight="800" fill="#fff">END</text>
+        </g>
+
+        <!-- Legend -->
+        <g>
+          <line x1="40" y1="580" x2="70" y2="580" stroke="#7A8B9C" stroke-width="2" />
+          <text x="78" y="584" font-size="11" font-weight="700" fill="#5E6E80">主边</text>
+          <line x1="130" y1="580" x2="160" y2="580" stroke="#A35B12" stroke-width="2" stroke-dasharray="5 3" />
+          <text x="168" y="584" font-size="11" font-weight="700" fill="#5E6E80">条件边</text>
+          <line x1="240" y1="580" x2="270" y2="580" stroke="#9B2C2C" stroke-width="2" stroke-dasharray="5 3" />
+          <text x="278" y="584" font-size="11" font-weight="700" fill="#5E6E80">修复环</text>
+          <rect x="360" y="568" width="18" height="18" rx="5" fill="#E7F1FA" stroke="#1E5A96" />
+          <text x="386" y="582" font-size="11" font-weight="700" fill="#5E6E80">ReAct 子图</text>
+          <rect x="480" y="568" width="18" height="18" rx="5" fill="#E5F4F1" stroke="#0F6E62" />
+          <text x="506" y="582" font-size="11" font-weight="700" fill="#5E6E80">Coordinator 子图</text>
+          <rect x="640" y="568" width="18" height="18" rx="5" fill="#fff" stroke="#9B2C2C" />
+          <text x="666" y="582" font-size="11" font-weight="700" fill="#5E6E80">确定性安全节点</text>
+        </g>
+      </svg>
+    </div>
+
+    <div class="bottom">
+      <div class="mode react">
+        <h3>ReAct <em>缩小标注</em></h3>
+        <p>简单问：Agent 循环调 Tool（内部仍走 validate/execute）。</p>
+      </div>
+      <div class="mode coord">
+        <h3>Coordinator <em>缩小标注</em></h3>
+        <p>复杂问：节点链 Schema→SQL→Guard→Sandbox→Chart，可 Repair×1。</p>
+      </div>
+      <div class="shared">
+        <div><b>Tools</b> schema · metric · validate_sql · execute_sql · chart</div>
+        <div class="g"><b>硬约束</b> 无旁路 SQL · AuditLog ⟂ Prompt</div>
+        <div><b>intent</b> 业务类枚举 · 不决定分流</div>
+        <div><b>route_mode</b> react / coordinator · 规则可覆盖</div>
+      </div>
+    </div>
+  </main>
+</body>
+</html>
