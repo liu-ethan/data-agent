@@ -3,9 +3,8 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator
 
-from app.agent.answer_composer import compose_answer
+from app.agent import answer_composer, sql_generator
 from app.agent.sql_executor import execute_sql
-from app.agent.sql_generator import generate_sql
 from app.agent.state import AgentState
 from app.api.schema import build_schema_tables
 from app.security.sql_guardrail import check_sql
@@ -27,7 +26,7 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
         active_node = "SQLGenerator"
         yield ("node_start", {"node": active_node})
         schema_tables = build_schema_tables(state.user_role)
-        state.generated_sql = generate_sql(
+        state.generated_sql = sql_generator.generate_sql(
             state.question, schema_tables, state.user_role
         )
         yield ("node_end", {"node": active_node, "summary": "sql_generated"})
@@ -69,7 +68,7 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
 
         active_node = "AnswerComposer"
         yield ("node_start", {"node": active_node})
-        state.answer = compose_answer(
+        state.answer = answer_composer.compose_answer(
             state.question, state.columns, state.rows
         )
         yield ("node_end", {"node": active_node, "summary": "composed"})
