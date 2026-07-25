@@ -73,6 +73,19 @@ def test_rejects_sqlite_master():
     assert not check_sql("SELECT * FROM sqlite_master", user_role="admin").ok
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM 'app_users'",
+        'SELECT * FROM "app_users"',
+        "SELECT * FROM [app_users]",
+        "SELECT * FROM `app_users`",
+    ],
+)
+def test_rejects_quoted_app_table_identifiers(sql):
+    assert not check_sql(sql, user_role="admin").ok
+
+
 @pytest.mark.parametrize("column_name", sorted(SENSITIVE_USER_COLUMNS))
 def test_rejects_analyst_qualified_sensitive_columns(column_name):
     sql = f"SELECT users.{column_name} FROM users"
@@ -82,6 +95,26 @@ def test_rejects_analyst_qualified_sensitive_columns(column_name):
 
 def test_rejects_analyst_bare_sensitive_column_from_users():
     assert not check_sql("SELECT phone FROM users", user_role="analyst").ok
+
+
+def test_rejects_analyst_sensitive_column_through_user_alias():
+    assert not check_sql("SELECT u.name FROM users u", user_role="analyst").ok
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM users",
+        "SELECT users.* FROM users",
+        "SELECT u.* FROM users AS u",
+    ],
+)
+def test_rejects_analyst_wildcards_from_users(sql):
+    assert not check_sql(sql, user_role="analyst").ok
+
+
+def test_rejects_analyst_sensitive_column_from_quoted_users_table():
+    assert not check_sql("SELECT name FROM 'users'", user_role="analyst").ok
 
 
 def test_does_not_treat_qualified_business_column_as_bare_user_column():
@@ -95,3 +128,11 @@ def test_admin_can_select_sensitive_columns(column_name):
     sql = f"SELECT users.{column_name} FROM users LIMIT 10"
 
     assert check_sql(sql, user_role="admin").ok
+
+
+def test_rejects_unknown_role():
+    assert not check_sql("SELECT 1", user_role="manager").ok
+
+
+def test_allows_forbidden_keyword_inside_trailing_comment():
+    assert check_sql("SELECT 1 -- DROP", user_role="analyst").ok
