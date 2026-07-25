@@ -14,8 +14,9 @@
 [![Agent 架构 · LangGraph 节点图](./docs/architecture-16x9.png)](./docs/architecture-16x9.html)
 
 > **状态说明**：规格以 [`docs/`](./docs/需求文档.md) 为准（尤其 [`03-Agent设计`](./docs/03-Agent设计.md)）。按 [`06-开发计划`](./docs/06-开发计划.md) 分 Phase 实现。  
-> **Phase 1 已落地**：`backend/` / `frontend/` 脚手架、`init_db`、不鉴权的 `GET /api/schema`、JSON 日志骨架。登录 / chat / Agent 等仍为目标形态（Phase 2+）。  
-> **Python**：强制使用 conda 环境 `python3.12`（见 [`AGENTS.md`](./AGENTS.md)），勿用系统 Python 或仓库内 `.venv`。
+> **Phase 1–2 已落地**：脚手架与 `init_db`；JWT 注册/登录；鉴权后的 `GET /api/schema` / `examples`；`POST /api/chat` SSE；线性管线（生成 SQL → **最小只读 Guardrail** → 执行 → 结论）；浅白营销登录页 `/` 与工作台 `/app`。LangGraph 节点拆分、完整沙箱 / AuditLog、图表等仍为 Phase 3+。  
+> **Python**：强制使用 conda 环境 `python3.12`（见 [`AGENTS.md`](./AGENTS.md)），勿用系统 Python 或仓库内 `.venv`。  
+> **安全**：默认可演示的 chat 路径上 SQL **必须**经 Guardrail；无「跳过校验直连 DB」的 Demo 分支。
 
 ---
 
@@ -132,8 +133,6 @@ SQL 安全为确定性独立模块，不使用黑盒 SQL Agent。
 
 ## 本地启动
 
-> Phase 1 可启动后端与前端脚手架。注册登录 / 工作台提问为 Phase 2+ 目标形态。
-
 ### 1. 配置
 
 复制模板并填写（**不要提交 `config.yaml`**）：
@@ -146,7 +145,7 @@ cp config_template.yaml config.yaml
 
 | 段 | 说明 |
 |----|------|
-| `llm.*` | OpenAI 兼容模型（`api_key` / `base_url` / `model`） |
+| `llm.*` | OpenAI 兼容模型（`api_key` / `base_url` / `model`）；chat 生成 SQL 需要有效配置 |
 | `backend.*` | 端口、`jwt_secret`、`admin_invite_code`、`database_path`、`cors_origins` |
 | `frontend.*` | 开发端口、`api_base_url` |
 
@@ -161,7 +160,7 @@ cd backend
 /home/user/miniconda3/envs/python3.12/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-端口与 CORS 以 `config.yaml` 的 `backend` 段为准。验收探针：`GET http://127.0.0.1:8000/api/schema`（Phase 1 **暂不鉴权**，仅返回 8 张业务表）。
+端口与 CORS 以 `config.yaml` 的 `backend` 段为准。受保护接口需 Bearer JWT（含 `GET /api/schema`）。
 
 ### 3. 前端
 
@@ -173,16 +172,20 @@ npm run dev
 
 Vite 会读取根目录 `config.yaml`（缺失时回退 `config_template.yaml`）中的 `frontend.port` / `api_base_url`。
 
-浏览器打开前端地址（默认 `http://localhost:5173`）。Phase 1 为 Vite 默认页；Phase 2 起：
+浏览器打开前端地址（默认 `http://localhost:5173`）：
 
-1. 在 `/` 注册：默认 `analyst`；选 `admin` 时填写邀请码  
-2. 登录后进入 `/app` 工作台提问  
+1. 在 `/` 注册：默认 `analyst`；选 `admin` 时填写 `config.yaml` 中的 `backend.admin_invite_code`  
+2. 或使用种子账号：`demo_analyst` / `demo1234`（`init_db` 写入）  
+3. 登录后进入 `/app`；未登录访问 `/app` 会回到 `/`  
+4. 工作台提问：SSE 展示回答、SQL、结果表与简易 Trace；SQL 默认经最小只读 Guardrail 后执行  
 
-### 4. 示例问题（Phase 2+）
+### 4. 示例问题
 
 - 上个月 GMV 最高的 5 个渠道是什么？  
 - 最近 30 天每天的订单量和 GMV 趋势如何？  
 - 哪些商品品类的退款率最高？  
+- 各城市的新用户注册数排名如何？  
+- 不同支付方式的支付成功率是多少？  
 
 ---
 
@@ -190,7 +193,7 @@ Vite 会读取根目录 `config.yaml`（缺失时回退 `config_template.yaml`�
 
 | | analyst | admin |
 |--|---------|--------|
-| 注册 | 直接注册 | 需 `ADMIN_INVITE_CODE` |
+| 注册 | 直接注册 | 需 `config.yaml` → `backend.admin_invite_code` |
 | SELECT | 经营数据 OK | 全部业务字段 |
 | 敏感字段 | 拦截（`users.name/phone/email/id_card`） | 允许 |
 | INSERT / UPDATE / DELETE | 禁止 | 允许（**仅业务表**） |

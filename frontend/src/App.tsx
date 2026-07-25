@@ -1,6 +1,6 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthContext'
-import { RequireAuth } from './auth/RequireAuth'
+import { ProtectedRoute } from './auth/ProtectedRoute'
 import LoginPage from './pages/LoginPage'
 import AppWorkbench from './pages/AppWorkbench'
 
@@ -13,9 +13,9 @@ function App() {
           <Route
             path="/app"
             element={
-              <RequireAuth>
+              <ProtectedRoute>
                 <AppWorkbench />
-              </RequireAuth>
+              </ProtectedRoute>
             }
           />
         </Routes>
