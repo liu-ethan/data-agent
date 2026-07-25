@@ -1,3 +1,96 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+:root {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --text: #12141a;
+  --muted: #5c6370;
+  --accent: #0f6e56;
+  --accent-soft: #dcf0e6;
+  --border: #e6e8ec;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: 'Sora', sans-serif;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Faint coordinate-grid texture for hero atmosphere */
+.bg-grid-dots {
+  background-image: radial-gradient(circle, rgba(15, 110, 86, 0.16) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise {
+  animation: rise-in 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes underline-draw {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.animate-underline {
+  animation: underline-draw 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.5s both;
+  transform-origin: left;
+}
+
+@keyframes ticker-fade {
+  0%,
+  100% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  8%,
+  30% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  38% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes caret-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.animate-caret {
+  animation: caret-blink 1s step-end infinite;
+}
