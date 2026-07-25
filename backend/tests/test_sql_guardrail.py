@@ -136,3 +136,23 @@ def test_rejects_unknown_role():
 
 def test_allows_forbidden_keyword_inside_trailing_comment():
     assert check_sql("SELECT 1 -- DROP", user_role="analyst").ok
+
+
+@pytest.mark.parametrize(
+    ("sql", "role"),
+    [
+        ("SELECT * FROM/**/app_users", "admin"),
+        ("SELECT name FROM/**/users", "analyst"),
+        ('SELECT "u".* FROM users AS "u"', "analyst"),
+        ("SELECT x.name FROM (SELECT name FROM users) AS x", "analyst"),
+    ],
+)
+def test_rejects_comment_alias_and_nested_select_bypasses(sql, role):
+    assert not check_sql(sql, user_role=role).ok
+
+
+@pytest.mark.parametrize("alias", ['"u"', "[u]", "'u'", "`u`"])
+def test_rejects_analyst_wildcard_through_quoted_user_alias(alias):
+    sql = f"SELECT {alias}.* FROM users AS {alias}"
+
+    assert not check_sql(sql, user_role="analyst").ok

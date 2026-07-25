@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from app.db.schema import APP_TABLES, SENSITIVE_USER_COLUMNS
 
 _STRING_LITERAL_RE = re.compile(r"'(?:''|[^'])*'")
+_SINGLE_QUOTED_QUALIFIER_RE = re.compile(r"'(?:''|[^'])*'(?=\s*\.)")
+_QUOTED_IDENTIFIER_RE = re.compile(
+    r"""(?:"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]+\])"""
+)
 _LEADING_COMMENT_RE = re.compile(r"\A(?:\s*--[^\n]*(?:\n|\Z))*\s*")
 _IDENTIFIER = r"""(?:"(?:""|[^"])*"|'(?:''|[^'])*'|`(?:``|[^`])*`|\[[^\]]+\]|[A-Z_]\w*)"""
 _SOURCE_RE = re.compile(
@@ -77,12 +81,14 @@ def _strip_comments(sql: str) -> str:
             quote_end = "]" if char == "[" else char
             result.append(char)
         elif char == "-" and next_char == "-":
+            result.append(" ")
             index += 2
             while index < len(sql) and sql[index] != "\n":
                 index += 1
             if index < len(sql):
                 result.append("\n")
         elif char == "/" and next_char == "*":
+            result.append(" ")
             index += 2
             while index + 1 < len(sql) and sql[index : index + 2] != "*/":
                 index += 1
@@ -116,6 +122,28 @@ def _sources(sql: str) -> list[tuple[str, str | None]]:
     return sources
 
 
+def _select_lists(sql: str) -> list[str]:
+    """Return every SELECT list, including lists in nested queries."""
+    select_lists: list[str] = []
+    for select_match in re.finditer(r"\bSELECT\b", sql):
+        depth = 0
+        index = select_match.end()
+        while index < len(sql):
+            if sql[index] == "(":
+                depth += 1
+            elif sql[index] == ")":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0:
+                from_match = re.match(r"\bFROM\b", sql[index:])
+                if from_match:
+                    select_lists.append(sql[select_match.end() : index])
+                    break
+            index += 1
+    return select_lists
+
+
 def check_sql(sql: str, *, user_role: str) -> GuardrailResult:
     """Check whether a single read-only SQL query is safe for the role."""
     if not sql.strip():
@@ -124,11 +152,18 @@ def check_sql(sql: str, *, user_role: str) -> GuardrailResult:
         return _reject("Unknown user role")
 
     sql_without_comments = _strip_comments(sql)
-    sql_without_strings = _STRING_LITERAL_RE.sub("''", sql_without_comments)
+    sql_with_qualified_identifiers = _SINGLE_QUOTED_QUALIFIER_RE.sub(
+        lambda match: _unquote_identifier(match.group()),
+        sql_without_comments,
+    )
+    sql_without_strings = _STRING_LITERAL_RE.sub("''", sql_with_qualified_identifiers)
     if ";" in sql_without_strings:
         return _reject("Multiple SQL statements are not allowed")
 
-    normalized = sql_without_strings.upper()
+    normalized = _QUOTED_IDENTIFIER_RE.sub(
+        lambda match: _unquote_identifier(match.group()),
+        sql_without_strings,
+    ).upper()
     query_start = _LEADING_COMMENT_RE.sub("", normalized)
     if not re.match(r"(?:SELECT|WITH)\b", query_start):
         return _reject("Only SELECT or WITH queries are allowed")
@@ -146,26 +181,33 @@ def check_sql(sql: str, *, user_role: str) -> GuardrailResult:
             return _reject(f"Access to {table_name.lower()} is not allowed")
 
     if user_role == "analyst":
-        sensitive_columns = "|".join(
-            re.escape(column.upper()) for column in SENSITIVE_USER_COLUMNS
-        )
-        user_qualifiers = {
-            alias or table_name
-            for table_name, alias in sources
-            if table_name == "USERS"
-        }
-        select_list = re.search(r"\bSELECT\b(?P<columns>.*?)\bFROM\b", normalized, re.DOTALL)
-        if user_qualifiers and select_list:
-            columns = select_list.group("columns")
-            if re.search(r"(?<![\w.])\*(?!\w)", columns):
-                return _reject("Analysts cannot select all user columns")
-            for qualifier in user_qualifiers | {"USERS"}:
-                if re.search(
-                    rf"\b{re.escape(qualifier)}\s*\.\s*(?:\*|{sensitive_columns}\b)",
+        if any(table_name == "USERS" for table_name, _ in sources):
+            non_user_qualifiers = {
+                qualifier
+                for table_name, alias in sources
+                if table_name != "USERS"
+                for qualifier in (table_name, alias)
+                if qualifier
+            }
+            sensitive_columns = "|".join(
+                re.escape(column.upper()) for column in SENSITIVE_USER_COLUMNS
+            )
+            for columns in _select_lists(normalized):
+                if re.search(r"(?<![\w.])\*(?!\w)", columns):
+                    return _reject("Analysts cannot select all user columns")
+                for wildcard in re.finditer(
+                    r"(?<![\w.])(?P<qualifier>[A-Z_]\w*)\s*\.\s*\*",
                     columns,
                 ):
-                    return _reject("Analysts cannot access sensitive user columns")
-            if re.search(rf"(?<![\w.])(?:{sensitive_columns})\b", columns):
-                return _reject("Analysts cannot access sensitive user columns")
+                    if wildcard.group("qualifier") not in non_user_qualifiers:
+                        return _reject("Analysts cannot select all user columns")
+                for sensitive in re.finditer(
+                    rf"(?<![\w.])(?:(?P<qualifier>[A-Z_]\w*)\s*\.\s*)?"
+                    rf"(?:{sensitive_columns})\b",
+                    columns,
+                ):
+                    qualifier = sensitive.group("qualifier")
+                    if qualifier not in non_user_qualifiers:
+                        return _reject("Analysts cannot access sensitive user columns")
 
     return GuardrailResult(ok=True, reason=None)
