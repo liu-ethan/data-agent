@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from app.agent.metrics import get_metric_spec
+from app.agent.metrics import get_metric_spec, query_knowledge
 from app.api.schema import build_schema_tables
 from app.security.sql_guardrail import check_sql
 from app.security.sql_sandbox import SandboxError, sandbox_execute
@@ -50,6 +50,16 @@ def _handle_retrieve_metric_definition(args: dict, _context: ToolContext) -> Too
     if spec is None:
         return ToolResult(ok=False, error="Unknown metric")
     return ToolResult(ok=True, data=dict(spec))
+
+
+def _handle_query_knowledge(args: dict, _context: ToolContext) -> ToolResult:
+    query = str(args.get("query") or "").strip()
+    kind = args.get("kind")
+    kind = str(kind).strip() if kind is not None else None
+    found = query_knowledge(query, kind=kind)
+    if found is None:
+        return ToolResult(ok=False, error="Knowledge not found")
+    return ToolResult(ok=True, data=found)
 
 
 def _handle_validate_sql(args: dict, context: ToolContext) -> ToolResult:
@@ -139,10 +149,32 @@ def ensure_builtins_registered() -> ToolRegistry:
     )
     reg.register(
         ToolSpec(
+            name="query_knowledge",
+            description="Query structured business knowledge such as metric definitions by key, alias, or natural-language name",
+            risk_level="low",
+            permission_policy="allow",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["metric"]},
+                },
+                "required": ["query"],
+            },
+        ),
+        _handle_query_knowledge,
+    )
+    reg.register(
+        ToolSpec(
             name="retrieve_metric_definition",
             description="Return metric definition by key",
             risk_level="low",
             permission_policy="allow",
+            input_schema={
+                "type": "object",
+                "properties": {"metric": {"type": "string"}},
+                "required": ["metric"],
+            },
         ),
         _handle_retrieve_metric_definition,
     )

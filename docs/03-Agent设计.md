@@ -216,7 +216,7 @@ IntentAnalyzer 的 prompt **只放**：
 - 优先：**一次轻量模型调用**产出上表结构（延迟友好）
 - 规则覆盖：ComplexityRouter 在模型之后运行，对高置信规则命中可改写 `route_mode`，并设 `route_source=rule_override`
 - 模型失败或 `unknown` 时：默认 `react`；明显多步关键词再升为 `coordinator`
-- 代码内维护 `METRIC_VOCAB` / `DIMENSION_VOCAB`；与 2.4 口径表通过 metric key 关联，避免 Intent prompt 写死 SQL 表达式
+- `METRIC_VOCAB` 从结构化指标知识库加载；`DIMENSION_VOCAB` 仍由代码维护。Intent prompt 只拿 metric key/alias 级词表，不写 SQL 表达式
 
 ### 2.2 ClarificationChecker
 
@@ -269,12 +269,13 @@ IntentAnalyzer 的 prompt **只放**：
 要求：
 
 - 不把全量 Schema 全部塞给模型；按 intent、slots.metrics / group_by、关键词选择相关表
-- 将 slots 中的 metric key **映射**为 SQL 口径与所需列（见下表）
+- 将 slots 中明确的 metric key **确定性映射**为 SQL 口径与所需列（见下表）
+- 指标口径沉淀在 `backend/app/agent/knowledge/metrics.yaml`，由 KnowledgeLoader 读取校验，KnowledgeService 对外提供 `get_metric_spec()`；SchemaRetriever 直接使用该服务，ReAct 可通过 `query_knowledge` Tool 按需查询
 - 输出 relevant_tables 和 relevant_columns
 - **不返回**应用表（`app_users`、`chat_sessions` 等）
 - 表变大时优先加强本节点的召回/裁剪，而不是扩大 Intent 词表去枚举所有列
 
-指标口径（第一版约定；key 与 Intent `METRIC_VOCAB` 对齐）：
+指标口径（第一版约定；key 与 Intent `METRIC_VOCAB` 对齐，知识源为 YAML）：
 
 - gmv / GMV = `sum(orders.pay_amount)`（可按时间/状态过滤，默认已支付口径在实现里注明）
 - order_count / 订单量 = `count(distinct orders.id)`
@@ -427,9 +428,13 @@ admin：
 
 用途：查询业务表结构和字段说明（不含应用表；analyst 可隐藏敏感字段元数据）。
 
+#### query_knowledge
+
+用途：按自然语言名称、别名或 key 查询结构化业务知识。第一版支持指标口径查询；后续可扩展维度解释、时间口径、业务规则等知识。ReAct 在指标不明确或出现别名时可调用，避免把全部知识塞进 prompt。
+
 #### retrieve_metric_definition
 
-用途：查询业务指标口径（与 2.4 口径表一致）。
+用途：按 metric key 查询业务指标口径（兼容旧链路；数据来自 YAML 知识库）。
 
 #### validate_sql
 

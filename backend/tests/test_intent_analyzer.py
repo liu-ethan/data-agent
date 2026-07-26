@@ -14,6 +14,13 @@ def test_prompt_has_no_full_schema():
     assert "channel_analysis" in blob
 
 
+def test_prompt_includes_metric_aliases_from_knowledge_yaml():
+    messages = build_intent_prompt("上个月销售额最高的渠道？")
+    blob = json.dumps(messages, ensure_ascii=False)
+    assert "gmv" in blob
+    assert "销售额" in blob
+
+
 def test_prompt_includes_optional_memory_context():
     messages = build_intent_prompt(
         "那按城市拆一下",

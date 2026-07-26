@@ -1,8 +1,7 @@
-from app.agent.knowledge import KnowledgeConfigError
+from app.agent.knowledge.loader import KnowledgeConfigError, clear_cache, load_metrics
 from app.agent.knowledge.service import (
     get_metric_keys,
     get_metric_spec,
-    format_metric_vocab_for_prompt,
     is_known_metric,
     load_metric_specs,
     query_knowledge,
@@ -10,10 +9,11 @@ from app.agent.knowledge.service import (
 
 __all__ = [
     "KnowledgeConfigError",
+    "clear_cache",
     "get_metric_keys",
     "get_metric_spec",
-    "format_metric_vocab_for_prompt",
     "is_known_metric",
     "load_metric_specs",
+    "load_metrics",
     "query_knowledge",
 ]

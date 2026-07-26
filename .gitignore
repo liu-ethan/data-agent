@@ -12,3 +12,5 @@ backend/data/*.db
 .worktrees/
 .superpowers/
 logs/
+docs/AGENTS.md
+.vscode/

@@ -1,0 +1,50 @@
+version: "1"
+metrics:
+  gmv:
+    display_name: "销售额"
+    aliases: ["GMV", "成交金额", "支付金额", "交易额"]
+    expression: "sum(orders.pay_amount)"
+    tables: ["orders"]
+    notes: "默认按已支付订单的支付金额汇总，可按时间、状态和维度过滤。"
+  order_count:
+    display_name: "订单数"
+    aliases: ["订单量", "下单量"]
+    expression: "count(distinct orders.id)"
+    tables: ["orders"]
+    notes: "按订单主键去重统计。"
+  aov:
+    display_name: "客单价"
+    aliases: ["平均订单金额", "平均客单价"]
+    expression: "sum(orders.pay_amount) / count(distinct orders.id)"
+    tables: ["orders"]
+    notes: "销售额除以订单数，生成 SQL 时需要处理除零。"
+  refund_rate:
+    display_name: "退款率"
+    aliases: ["退单率"]
+    expression: "count(distinct refunds.order_id) / count(distinct orders.id)"
+    tables: ["orders", "refunds"]
+    notes: "同一时间窗内统计退款订单数与订单数，生成 SQL 时需要对齐时间过滤。"
+  payment_success_rate:
+    display_name: "支付成功率"
+    aliases: ["付款成功率"]
+    expression: "count(payments where status=success) / count(payments)"
+    tables: ["payments"]
+    notes: "同一时间窗内统计成功支付数与全部支付数。"
+  conversion_rate:
+    display_name: "转化率"
+    aliases: ["访问转化率", "成交转化率"]
+    expression: "count(distinct session_id where is_conversion=1) / count(distinct session_id)"
+    tables: ["traffic_logs"]
+    notes: "基于访问日志中的转化标记统计。"
+  profit:
+    display_name: "利润"
+    aliases: ["毛利"]
+    expression: "sum((order_items.unit_price - products.cost) * order_items.quantity - order_items.discount_amount)"
+    tables: ["order_items", "products"]
+    notes: "需要关联商品成本表，按订单明细计算。"
+  profit_rate:
+    display_name: "利润率"
+    aliases: ["毛利率"]
+    expression: "profit / sum(order_items.unit_price * order_items.quantity - order_items.discount_amount)"
+    tables: ["order_items", "products"]
+    notes: "利润除以销售额，生成 SQL 时需要处理除零。"

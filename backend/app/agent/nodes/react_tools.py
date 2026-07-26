@@ -9,6 +9,7 @@ from app.tools.schemas import ToolContext
 
 REACT_TOOL_NAMES = (
     "query_schema",
+    "query_knowledge",
     "retrieve_metric_definition",
     "validate_sql",
     "propose_sql",
@@ -22,6 +23,14 @@ PROPOSE_SQL_SCHEMA = {
 
 _FALLBACK_SCHEMAS = {
     "query_schema": {"type": "object", "properties": {}},
+    "query_knowledge": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "kind": {"type": "string", "enum": ["metric"]},
+        },
+        "required": ["query"],
+    },
     "retrieve_metric_definition": {
         "type": "object",
         "properties": {"metric": {"type": "string"}},

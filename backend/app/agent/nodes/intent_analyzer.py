@@ -4,11 +4,11 @@ import json
 import re
 
 from app.agent.llm import chat_completion
+from app.agent.metrics import format_metric_vocab_for_prompt
 from app.agent.state import AgentState
 from app.agent.vocab import (
     DIMENSION_VOCAB,
     INTENTS,
-    METRIC_VOCAB,
     TIME_RANGE_VOCAB,
 )
 from app.prompts import render
@@ -35,7 +35,7 @@ def build_intent_prompt(
     intent_list = ", ".join(
         sorted(i for i in INTENTS if i != "unknown")
     ) + ", unknown"
-    metrics = ", ".join(sorted(METRIC_VOCAB))
+    metrics = format_metric_vocab_for_prompt()
     dimensions = ", ".join(sorted(DIMENSION_VOCAB))
     time_ranges = ", ".join(sorted(TIME_RANGE_VOCAB))
 

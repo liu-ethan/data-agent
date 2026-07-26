@@ -19,6 +19,7 @@ def test_five_tools_registered():
     names = {t.name for t in reg.list_tools()}
     assert names >= {
         "query_schema",
+        "query_knowledge",
         "retrieve_metric_definition",
         "validate_sql",
         "execute_sql",
@@ -51,6 +52,18 @@ def test_retrieve_metric_definition(tmp_db_path):
         context=_ctx(),
     )
     assert bad.ok is False
+
+
+def test_query_knowledge_metric_by_alias(tmp_db_path):
+    reg = ensure_builtins_registered()
+    out = reg.invoke(
+        "query_knowledge",
+        {"query": "销售额"},
+        context=_ctx(),
+    )
+    assert out.ok
+    assert out.data["kind"] == "metric"
+    assert out.data["metric"]["key"] == "gmv"
 
 
 def test_validate_and_execute_sql_read(tmp_db_path, monkeypatch, tmp_path):
@@ -99,6 +112,7 @@ def test_validate_sql_failure_returns_structured_error():
 def test_ensure_builtins_registered_idempotent():
     expected = {
         "query_schema",
+        "query_knowledge",
         "retrieve_metric_definition",
         "validate_sql",
         "execute_sql",
@@ -113,8 +127,8 @@ def test_ensure_builtins_registered_idempotent():
     assert reg1 is reg2
     assert names1 == expected
     assert names2 == expected
-    assert len1 == 5
-    assert len2 == 5
+    assert len1 == 6
+    assert len2 == 6
 
 
 def test_render_chart_returns_config():
