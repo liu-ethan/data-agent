@@ -502,36 +502,26 @@ admin：
 
 ### 4.3 结构化日志格式
 
-后端使用 JSON 行日志（stdout + 可选 `logs/audit.jsonl` 追加写）。
+应用日志**同时输出到 stdout 与 `logs/` 目录文件**，文本格式（便于人工排查）：
 
-单条字段建议：
-
-```json
-{
-  "ts": "2026-07-25T00:00:00Z",
-  "level": "INFO",
-  "request_id": "req_xxx",
-  "trace_id": "tr_xxx",
-  "session_id": "default",
-  "user_id": "u_1",
-  "user_role": "admin",
-  "event": "tool_end",
-  "node": "SQLSandboxExecutor",
-  "tool": "execute_sql",
-  "status": "ok",
-  "latency_ms": 42,
-  "detail": {
-    "sql_fingerprint": "update_campaigns_budget",
-    "affected_rows": 1,
-    "risk_level": "high"
-  }
-}
+```text
+INFO 2026-07-26 11:01:00 :     Waiting for application startup.
+INFO 2026-07-26 11:01:23 :     request_start request_id=req_xxx path=/api/chat method=POST
+INFO 2026-07-26 11:01:24 :     prompt_input mode=tools model=... detail={"messages":[...],"tools":[...]}
+INFO 2026-07-26 11:01:25 :     prompt_output mode=tools detail={"content":null,"tool_calls":[...]}
+INFO 2026-07-26 11:01:25 :     tool_start tool=execute_sql detail={"args":{...}}
+INFO 2026-07-26 11:01:25 :     tool_end tool=execute_sql status=ok detail={"args":{...},"data":{...}}
 ```
+
+- 应用日志：`logs/YYYY-MM-DD.log`；同日文件超过 10MB 时滚动为 `YYYY-MM-DD_1.log`、`YYYY-MM-DD_2.log`…
+- 写操作审计：另附 `logs/audit.jsonl`（JSONL、脱敏，与 Prompt 分离）
+- 排查用应用日志尽量完整：每次 LLM 的 `prompt_input` / `prompt_output`（含 messages / tools / content / tool_calls）、Registry 的 `tool_start` / `tool_end`（含完整 args 与 data）
 
 事件类型至少覆盖：
 
 - `run_start` / `run_end`
 - `node_start` / `node_end`
+- `prompt_input` / `prompt_output` / `llm_tool_calls`
 - `tool_start` / `tool_end`（对齐 PreToolUse / PostToolUse 审计时机）
 - `guardrail_deny`
 - `sql_repair`

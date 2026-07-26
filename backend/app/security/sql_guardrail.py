@@ -160,12 +160,14 @@ def check_sql(sql: str, *, user_role: str) -> GuardrailResult:
         sql_without_comments,
     )
     sql_without_strings = _STRING_LITERAL_RE.sub("''", sql_with_qualified_identifiers)
-    if ";" in sql_without_strings:
+    # Allow a single trailing semicolon; reject only when another ";" remains.
+    sql_without_trailing_semicolon = sql_without_strings.rstrip(" \t\r\n;")
+    if ";" in sql_without_trailing_semicolon:
         return _reject("Multiple SQL statements are not allowed")
 
     normalized = _QUOTED_IDENTIFIER_RE.sub(
         lambda match: _unquote_identifier(match.group()),
-        sql_without_strings,
+        sql_without_trailing_semicolon,
     ).upper()
     query_start = _LEADING_COMMENT_RE.sub("", normalized)
     blocked_tables = {table_name.upper() for table_name in APP_TABLES} | {

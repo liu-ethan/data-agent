@@ -223,7 +223,11 @@ def test_executor_failure_emits_error_and_skips_answer_composer(tmp_db_path):
         })
 
     names = [event for event, _ in events]
-    assert ("error", {"message": "database unavailable"}) in events
+    error_payloads = [data for event, data in events if event == "error"]
+    assert error_payloads
+    assert error_payloads[0]["message"] == "database unavailable"
+    assert error_payloads[0]["trace_id"] == "req_executor_error"
+    assert error_payloads[0]["request_id"] == "req_executor_error"
     assert "rows" not in names
     assert not any(
         event == "node_end" and data["node"] == "AnswerComposer"

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+
+from app.log.logging import log_event
 from app.tools.audit import append_audit
 from app.tools.schemas import ToolContext, ToolResult, ToolSpec
 
@@ -35,6 +37,16 @@ class ToolRegistry:
                     "data": {"tool": name, "reason": "not_found_or_disabled", "node": context.node},
                 }
             )
+            log_event(
+                "WARNING",
+                "permission_deny",
+                request_id=context.request_id,
+                trace_id=context.trace_id,
+                node=context.node,
+                tool=name,
+                latency_ms=latency,
+                detail={"reason": "not_found_or_disabled", "args": args},
+            )
             append_audit(
                 {
                     "event": "permission_deny",
@@ -55,6 +67,19 @@ class ToolRegistry:
                 "event": "tool_start",
                 "data": {"tool": name, "risk_level": spec.risk_level, "node": context.node},
             }
+        )
+        log_event(
+            "INFO",
+            "tool_start",
+            request_id=context.request_id,
+            trace_id=context.trace_id,
+            session_id=context.session_id,
+            user_id=context.user_id,
+            user_role=context.user_role,
+            node=context.node,
+            tool=name,
+            risk_level=spec.risk_level,
+            detail={"args": args},
         )
         append_audit(
             {
@@ -88,6 +113,20 @@ class ToolRegistry:
                         "node": context.node,
                     },
                 }
+            )
+            log_event(
+                "WARNING",
+                "tool_end",
+                request_id=context.request_id,
+                trace_id=context.trace_id,
+                session_id=context.session_id,
+                user_id=context.user_id,
+                user_role=context.user_role,
+                node=context.node,
+                tool=name,
+                status="error",
+                latency_ms=latency,
+                detail={"reason": "permission_deny", "args": args},
             )
             append_audit(
                 {
@@ -139,6 +178,24 @@ class ToolRegistry:
             ):
                 if key in raw.data:
                     detail[key] = raw.data[key]
+        log_event(
+            "INFO",
+            "tool_end",
+            request_id=context.request_id,
+            trace_id=context.trace_id,
+            session_id=context.session_id,
+            user_id=context.user_id,
+            user_role=context.user_role,
+            node=context.node,
+            tool=name,
+            status=status,
+            latency_ms=latency,
+            detail={
+                **detail,
+                "args": args,
+                "data": raw.data,
+            },
+        )
         append_audit(
             {
                 "event": "tool_end",

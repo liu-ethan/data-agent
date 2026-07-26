@@ -37,6 +37,7 @@ export default function AppWorkbench() {
   const [columns, setColumns] = useState<string[]>([])
   const [rows, setRows] = useState<Record<string, unknown>[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [errorTraceId, setErrorTraceId] = useState<string | null>(null)
   const [trace, setTrace] = useState<TraceEntry[]>([])
   const [traceOpen, setTraceOpen] = useState(false)
   const [latencyMs, setLatencyMs] = useState<number | null>(null)
@@ -52,6 +53,7 @@ export default function AppWorkbench() {
 
   const abortRef = useRef<AbortController | null>(null)
   const traceIdRef = useRef(0)
+  const runTraceIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -94,6 +96,7 @@ export default function AppWorkbench() {
     setColumns([])
     setRows([])
     setError(null)
+    setErrorTraceId(null)
     setTrace([])
     setLatencyMs(null)
     setGuardrailPassed(false)
@@ -101,6 +104,7 @@ export default function AppWorkbench() {
     setChart(null)
     setWriteResult(null)
     traceIdRef.current = 0
+    runTraceIdRef.current = null
   }
 
   function pushTrace(event: string, summary: string) {
@@ -114,7 +118,7 @@ export default function AppWorkbench() {
   async function handleSubmit(e?: FormEvent) {
     e?.preventDefault()
     const q = question.trim()
-    if (!q || streaming) return
+    if (!q || streaming || !user) return
 
     abortRef.current?.abort()
     const ac = new AbortController()
@@ -127,14 +131,20 @@ export default function AppWorkbench() {
     try {
       await streamChat({
         question: q,
-        sessionId: 'default',
+        // session 按 user 隔离；勿用全局 "default"（会被其他用户占用）
+        sessionId: `default-${user.id}`,
         signal: ac.signal,
         onEvent: (event, data) => {
           switch (event) {
             case 'run_start':
+              runTraceIdRef.current = data.trace_id
+                ? String(data.trace_id)
+                : data.request_id
+                  ? String(data.request_id)
+                  : null
               pushTrace(
                 event,
-                `request ${String(data.request_id ?? '')}`.trim(),
+                `trace ${String(data.trace_id ?? data.request_id ?? '')}`.trim(),
               )
               break
             case 'node_start':
@@ -217,10 +227,21 @@ export default function AppWorkbench() {
                 `${String(data.route_mode ?? '')} · ${String(data.route_source ?? '')}`,
               )
               break
-            case 'error':
+            case 'error': {
               setError(String(data.message ?? '分析失败'))
-              pushTrace(event, String(data.message ?? 'error'))
+              const tid =
+                (data.trace_id ? String(data.trace_id) : null) ||
+                (data.request_id ? String(data.request_id) : null) ||
+                runTraceIdRef.current
+              setErrorTraceId(tid)
+              pushTrace(
+                event,
+                tid
+                  ? `${String(data.message ?? 'error')} · ${tid}`
+                  : String(data.message ?? 'error'),
+              )
               break
+            }
             case 'done':
               if (typeof data.latency_ms === 'number') {
                 setLatencyMs(data.latency_ms)
@@ -347,7 +368,12 @@ export default function AppWorkbench() {
 
           {error && (
             <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-              {error}
+              <p>{error}</p>
+              {errorTraceId && (
+                <p className="mt-1 font-mono text-xs text-red-700/80">
+                  trace_id: {errorTraceId}
+                </p>
+              )}
             </div>
           )}
 

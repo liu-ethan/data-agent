@@ -5,6 +5,7 @@ from collections.abc import Iterator
 
 from app.agent.graph import build_graph
 from app.agent.state import AgentState
+from app.log.logging import log_event
 
 
 def _summarize(node: str, state: dict) -> str:
@@ -42,6 +43,14 @@ def _summarize(node: str, state: dict) -> str:
 
 def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
     started = time.monotonic()
+    run_ids = {
+        "request_id": state["request_id"],
+        "trace_id": state["trace_id"],
+        "session_id": state["session_id"],
+        "user_id": state.get("user_id"),
+        "user_role": state.get("user_role"),
+    }
+    log_event("INFO", "run_start", **run_ids)
     yield (
         "run_start",
         {
@@ -56,16 +65,32 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
     try:
         for update in graph.stream(merged, stream_mode="updates"):
             for node, delta in update.items():
+                log_event("INFO", "node_start", node=node, **run_ids)
                 yield ("node_start", {"node": node})
                 if isinstance(delta, dict):
                     merged.update(delta)
                     for item in delta.get("tool_events") or []:
                         yield (item["event"], item.get("data") or {})
+                summary = _summarize(node, merged)
+                log_event(
+                    "INFO",
+                    "node_end",
+                    node=node,
+                    summary=summary,
+                    **run_ids,
+                )
                 yield (
                     "node_end",
-                    {"node": node, "summary": _summarize(node, merged)},
+                    {"node": node, "summary": summary},
                 )
                 if node == "ComplexityRouter":
+                    log_event(
+                        "INFO",
+                        "route_decision",
+                        route_mode=merged.get("route_mode"),
+                        route_source=merged.get("route_source"),
+                        **run_ids,
+                    )
                     yield (
                         "route_decision",
                         {
@@ -94,7 +119,14 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
                         node == "SQLExecutor" and not merged.get("repaired")
                     )
                 ):
-                    yield ("error", {"message": merged["error"]})
+                    yield (
+                        "error",
+                        {
+                            "message": merged["error"],
+                            "request_id": run_ids["request_id"],
+                            "trace_id": run_ids["trace_id"],
+                        },
+                    )
                 if node == "SQLExecutor" and merged.get("is_write"):
                     yield (
                         "write_result",
@@ -123,10 +155,31 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
                 ):
                     yield ("answer", {"text": merged["answer"]})
     except Exception as exc:
-        yield ("error", {"message": str(exc)})
+        log_event(
+            "ERROR",
+            "run_error",
+            detail={"message": str(exc)[:500]},
+            **run_ids,
+        )
+        yield (
+            "error",
+            {
+                "message": str(exc),
+                "request_id": run_ids["request_id"],
+                "trace_id": run_ids["trace_id"],
+            },
+        )
 
     latency = int((time.monotonic() - started) * 1000)
     merged["latency_ms"] = latency
+    log_event(
+        "INFO",
+        "run_end",
+        latency_ms=latency,
+        need_clarification=bool(merged.get("need_clarification")),
+        repaired=bool(merged.get("repaired")),
+        **run_ids,
+    )
     yield (
         "done",
         {

@@ -40,7 +40,7 @@ function parseSseChunk(
 
 export async function streamChat({
   question,
-  sessionId = 'default',
+  sessionId = 'default-anon',
   signal,
   onEvent,
 }: StreamChatOptions): Promise<void> {

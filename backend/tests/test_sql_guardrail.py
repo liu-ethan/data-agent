@@ -34,6 +34,18 @@ def test_rejects_multi_statement():
     assert not check_sql("SELECT 1; SELECT 2", user_role="analyst").ok
 
 
+def test_allows_trailing_semicolon_on_single_statement():
+    assert check_sql("SELECT 1;", user_role="analyst").ok
+    assert check_sql(
+        "WITH t AS (SELECT 1 AS n) SELECT n FROM t WHERE n < 2;",
+        user_role="admin",
+    ).ok
+
+
+def test_rejects_semicolon_before_trailing_whitespace_second_statement():
+    assert not check_sql("SELECT 1; SELECT 2\n", user_role="analyst").ok
+
+
 def test_allows_semicolon_inside_string_literal():
     assert check_sql("SELECT ';' AS separator", user_role="analyst").ok
 

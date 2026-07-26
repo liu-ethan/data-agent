@@ -289,7 +289,10 @@ def test_coordinator_guardrail_rejection_skips_repair(tmp_db_path):
             )
         )
 
-    assert any(event == "error" for event, _ in events)
+    errors = [data for event, data in events if event == "error"]
+    assert errors
+    assert errors[0].get("trace_id") == "req_sensitive_guardrail"
+    assert errors[0].get("request_id") == "req_sensitive_guardrail"
     assert not any(event == "rows" for event, _ in events)
     assert not any(
         event == "node_start" and data["node"] == "SQLRepairer"
