@@ -4,12 +4,12 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.config import REPO_ROOT
+from app.config import get_settings
 from app.log.logging import log_event
 
 
 def audit_log_path() -> Path:
-    return REPO_ROOT / "logs" / "audit.jsonl"
+    return get_settings().audit_log_file
 
 
 def append_audit(record: dict) -> None:

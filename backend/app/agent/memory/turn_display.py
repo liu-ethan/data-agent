@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from app.agent.chart_planner import plan_chart
+from app.config import get_settings
 from app.security.sql_sandbox import (
     GuardrailSandboxError,
     SandboxError,
     sandbox_execute,
 )
-
-MAX_DISPLAY_ROWS = 100
 
 
 def build_display_payload(
@@ -20,7 +19,8 @@ def build_display_payload(
     trace: list | None = None,
 ) -> dict:
     cols = list(columns or [])
-    limited_rows = list(rows or [])[:MAX_DISPLAY_ROWS]
+    max_rows = get_settings().display_max_rows
+    limited_rows = list(rows or [])[:max_rows]
     return {
         "columns": cols,
         "rows": limited_rows,
@@ -44,7 +44,7 @@ def hydrate_display_from_sql(
     if result.is_write:
         return None
     columns = result.columns
-    rows = result.rows[:MAX_DISPLAY_ROWS]
+    rows = result.rows[: get_settings().display_max_rows]
     chart = None
     if columns and rows:
         # Skip LLM for hydrate; heuristic (+ enrich) is enough for UI restore.

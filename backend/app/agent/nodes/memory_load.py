@@ -14,7 +14,7 @@ def memory_load(state: AgentState) -> dict:
     return {
         "session_slots": store.load_last_turn_slots(session_id, user_id),
         "user_preferences": store.load_preferences(user_id),
-        "recent_summaries": store.load_recent_summaries(user_id, limit=5),
+        "recent_summaries": store.load_recent_summaries(user_id),
         "react_step": 0,
         "repaired": bool(state.get("repaired", False)),
     }

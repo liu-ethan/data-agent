@@ -5,7 +5,6 @@ import jwt
 from app.config import get_settings
 
 ALGORITHM = "HS256"
-TOKEN_EXPIRE_DAYS = 7
 
 
 def create_access_token(*, user_id: str, username: str, role: str) -> str:
@@ -16,7 +15,7 @@ def create_access_token(*, user_id: str, username: str, role: str) -> str:
         "username": username,
         "role": role,
         "iat": now,
-        "exp": now + timedelta(days=TOKEN_EXPIRE_DAYS),
+        "exp": now + timedelta(days=settings.jwt_expire_days),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=ALGORITHM)
 

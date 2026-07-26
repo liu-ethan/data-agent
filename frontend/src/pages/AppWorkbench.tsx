@@ -12,6 +12,7 @@ import {
 } from '../api/sessions'
 import { useAuth } from '../auth/AuthContext'
 import TurnCard, { type TurnView } from '../components/TurnCard'
+import { appConfig } from '../config'
 
 interface ExampleItem {
   id: string
@@ -470,7 +471,10 @@ export default function AppWorkbench() {
               )
               break
             case 'session_title': {
-              const title = String(data.title ?? '').slice(0, 10)
+              const title = String(data.title ?? '').slice(
+                0,
+                appConfig.sessionTitleMaxChars,
+              )
               const sessionId = String(
                 data.session_id ??
                   currentSessionIdRef.current ??

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from app.agent.state import AgentState
+from app.config import get_settings
 from app.tools.builtins import ensure_builtins_registered
 from app.tools.schemas import ToolContext
 
@@ -125,6 +126,7 @@ def react_tools_node(state: AgentState) -> dict:
 
     out["react_messages"] = messages
     out["tool_events"] = tool_events
-    if out["react_step"] >= 5 and not out.get("generated_sql"):
-        out["error"] = "ReAct exceeded the maximum of 5 tool steps"
+    max_steps = get_settings().agent_react_max_steps
+    if out["react_step"] >= max_steps and not out.get("generated_sql"):
+        out["error"] = f"ReAct exceeded the maximum of {max_steps} tool steps"
     return out

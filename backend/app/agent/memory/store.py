@@ -6,14 +6,21 @@ from datetime import datetime
 
 from app.agent.memory.summarize import merge_preferences, strip_sensitive
 from app.agent.memory.turn_display import hydrate_display_from_sql
+from app.config import get_settings
 from app.db.database import get_connection
-
-MAX_TURNS_PER_SESSION = 10
-MAX_SUMMARIES_PER_USER = 20
 
 
 class MemoryError(RuntimeError):
     pass
+
+
+def __getattr__(name: str):
+    """Lazy limits for `store.MAX_*` used by tests."""
+    if name == "MAX_TURNS_PER_SESSION":
+        return get_settings().memory_max_turns_per_session
+    if name == "MAX_SUMMARIES_PER_USER":
+        return get_settings().memory_max_summaries_per_user
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _now() -> str:
@@ -140,7 +147,7 @@ def list_turns(
             ORDER BY turn_index DESC
             LIMIT ?
             """,
-            (str(session_id), MAX_TURNS_PER_SESSION),
+            (str(session_id), get_settings().memory_max_turns_per_session),
         ).fetchall()
         ordered = list(reversed(rows))
         out: list[dict] = []
@@ -193,7 +200,8 @@ def _display_has_rows(display: dict | None) -> bool:
 
 def set_session_title_if_empty(session_id: str, user_id: str, title: str) -> bool:
     assert_session_owner(session_id, user_id)
-    clipped = strip_sensitive(title).strip()[:10]
+    max_chars = get_settings().memory_session_title_max_chars
+    clipped = strip_sensitive(title).strip()[:max_chars]
     conn = get_connection()
     try:
         now = _now()
@@ -301,7 +309,9 @@ def load_preferences(user_id: str) -> dict:
     return json.loads(row["preferences_json"])
 
 
-def load_recent_summaries(user_id: str, *, limit: int = 5) -> list[dict]:
+def load_recent_summaries(user_id: str, *, limit: int | None = None) -> list[dict]:
+    if limit is None:
+        limit = get_settings().memory_recent_summaries_limit
     conn = get_connection()
     try:
         rows = conn.execute(
@@ -381,7 +391,7 @@ def save_turn(
             "SELECT COUNT(*) FROM session_turns WHERE session_id = ?",
             (str(session_id),),
         ).fetchone()[0]
-        excess = count - MAX_TURNS_PER_SESSION
+        excess = count - get_settings().memory_max_turns_per_session
         if excess > 0:
             conn.execute(
                 """
@@ -493,7 +503,7 @@ def append_summary(
             "SELECT COUNT(*) FROM user_analysis_summaries WHERE user_id = ?",
             (owner_id,),
         ).fetchone()[0]
-        excess = count - MAX_SUMMARIES_PER_USER
+        excess = count - get_settings().memory_max_summaries_per_user
         if excess > 0:
             conn.execute(
                 """

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from app.agent.llm import chat_completion
+from app.prompts import render
 
 
 def compose_answer(
@@ -19,23 +20,19 @@ def compose_answer(
 
     try:
         sample = rows[:20]
-        payload = json.dumps(
+        result_json = json.dumps(
             {"columns": columns, "rows": sample, "total_rows": len(rows)},
             ensure_ascii=False,
         )
+        parts = render(
+            "answer_composer",
+            question=question,
+            result_json=result_json,
+        )
         return chat_completion(
             [
-                {
-                    "role": "system",
-                    "content": (
-                        "Summarize the SQL query result in concise Chinese for the user. "
-                        "Do not invent numbers not present in the data."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"Question: {question}\nResult JSON:\n{payload}",
-                },
+                {"role": "system", "content": parts["system"]},
+                {"role": "user", "content": parts["user"]},
             ]
         )
     except Exception:

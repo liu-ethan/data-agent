@@ -7,9 +7,6 @@ from dataclasses import dataclass, field
 from app.config import get_settings
 from app.security.sql_guardrail import check_sql
 
-MAX_WRITE_ROWS = 100
-SANDBOX_TIMEOUT_S = 5.0
-
 
 class SandboxError(Exception):
     pass
@@ -31,7 +28,8 @@ def _apply_row_limit(sql: str) -> str:
     stripped = sql.strip().rstrip(";")
     if re.search(r"\bLIMIT\b", stripped, re.IGNORECASE):
         return stripped
-    return f"SELECT * FROM ({stripped}) LIMIT 100"
+    limit = get_settings().sandbox_max_select_rows
+    return f"SELECT * FROM ({stripped}) LIMIT {limit}"
 
 
 def _is_write(sql: str) -> bool:
@@ -55,9 +53,10 @@ def sandbox_execute(sql: str, *, user_role: str) -> SandboxResult:
     if not gr.ok:
         raise GuardrailSandboxError(gr.reason or "SQL blocked by guardrail")
 
-    path = get_settings().db_path
+    settings = get_settings()
+    path = settings.db_path
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=SANDBOX_TIMEOUT_S)
+    conn = sqlite3.connect(path, timeout=settings.sandbox_connect_timeout_s)
     conn.row_factory = sqlite3.Row
     try:
         if user_role == "analyst":
@@ -67,9 +66,10 @@ def sandbox_execute(sql: str, *, user_role: str) -> SandboxResult:
                 conn.execute("BEGIN")
                 cur = conn.execute(sql.strip().rstrip(";"))
                 n = _write_affected_rows(conn, cur)
-                if n > MAX_WRITE_ROWS:
+                max_write = settings.sandbox_max_write_rows
+                if n > max_write:
                     conn.rollback()
-                    raise SandboxError(f"Write affects more than {MAX_WRITE_ROWS} rows")
+                    raise SandboxError(f"Write affects more than {max_write} rows")
                 conn.commit()
                 return SandboxResult(affected_rows=n, is_write=True)
             except SandboxError:

@@ -2,8 +2,8 @@ import json
 import re
 from unittest.mock import MagicMock, patch
 
+from app.config import get_settings
 from app.log.logging import (
-    MAX_LOG_BYTES,
     format_log_line,
     get_request_id,
     log_event,
@@ -85,20 +85,22 @@ def test_log_event_also_writes_daily_file(tmp_path, monkeypatch):
     assert "path=/api/chat" in parsed["msg"]
 
 
-def test_resolve_app_log_path_uses_suffix_when_base_full(tmp_path):
+def test_resolve_app_log_path_uses_suffix_when_base_full(tmp_path, tmp_db_path):
+    max_bytes = get_settings().logging_max_bytes
     base = tmp_path / "2026-07-26.log"
-    base.write_bytes(b"x" * MAX_LOG_BYTES)
+    base.write_bytes(b"x" * max_bytes)
     path = resolve_app_log_path(day="2026-07-26", log_dir=tmp_path)
     assert path == tmp_path / "2026-07-26_1.log"
 
 
-def test_log_event_rotates_when_file_exceeds_10m(tmp_path, monkeypatch):
+def test_log_event_rotates_when_file_exceeds_10m(tmp_path, monkeypatch, tmp_db_path):
     monkeypatch.setattr("app.log.logging.app_log_dir", lambda: tmp_path)
     monkeypatch.setattr(
         "app.log.logging._today_str", lambda: "2026-07-26"
     )
+    max_bytes = get_settings().logging_max_bytes
     base = tmp_path / "2026-07-26.log"
-    base.write_bytes(b"x" * MAX_LOG_BYTES)
+    base.write_bytes(b"x" * max_bytes)
 
     log_event("INFO", "request_end", status=200, latency_ms=3)
 
@@ -109,9 +111,10 @@ def test_log_event_rotates_when_file_exceeds_10m(tmp_path, monkeypatch):
     assert "status=200" in parsed["msg"]
 
 
-def test_resolve_uses_next_index_when_suffix_full(tmp_path):
-    (tmp_path / "2026-07-26.log").write_bytes(b"x" * MAX_LOG_BYTES)
-    (tmp_path / "2026-07-26_1.log").write_bytes(b"x" * MAX_LOG_BYTES)
+def test_resolve_uses_next_index_when_suffix_full(tmp_path, tmp_db_path):
+    max_bytes = get_settings().logging_max_bytes
+    (tmp_path / "2026-07-26.log").write_bytes(b"x" * max_bytes)
+    (tmp_path / "2026-07-26_1.log").write_bytes(b"x" * max_bytes)
     path = resolve_app_log_path(day="2026-07-26", log_dir=tmp_path)
     assert path == tmp_path / "2026-07-26_2.log"
 

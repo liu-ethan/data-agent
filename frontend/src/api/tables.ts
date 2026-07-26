@@ -1,3 +1,4 @@
+import { appConfig } from '../config'
 import { apiFetch } from './client'
 
 export interface TableSummary {
@@ -23,7 +24,7 @@ export async function listTables(): Promise<TableSummary[]> {
 
 export async function getTablePage(name: string, page: number): Promise<TablePage> {
   const res = await apiFetch(
-    `/api/tables/${encodeURIComponent(name)}?page=${page}&page_size=50`,
+    `/api/tables/${encodeURIComponent(name)}?page=${page}&page_size=${appConfig.tablesPageSize}`,
   )
   if (!res.ok) throw new Error('加载表数据失败')
   return res.json()

@@ -5,6 +5,7 @@ import re
 
 from app.agent.llm import chat_completion
 from app.agent.state import AgentState
+from app.prompts import render
 
 _FENCE = re.compile(r"```(?:sql)?\s*([\s\S]*?)```", re.I)
 
@@ -26,21 +27,16 @@ def sql_repairer(state: AgentState) -> dict:
         "columns": state.get("relevant_columns") or {},
         "metrics": state.get("metric_specs") or [],
     }
+    parts = render(
+        "sql_repairer",
+        question=question,
+        sql=sql,
+        error=err,
+        schema_json=json.dumps(schema, ensure_ascii=False),
+    )
     messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是 SQLite SQL 修复器。根据错误修复 SQL。"
-                "只输出一条 SQL，不要解释。不要 DDL。"
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Question:\n{question}\n\nSQL:\n{sql}\n\nError:\n{err}\n\n"
-                f"Schema:\n{json.dumps(schema, ensure_ascii=False)}"
-            ),
-        },
+        {"role": "system", "content": parts["system"]},
+        {"role": "user", "content": parts["user"]},
     ]
     try:
         fixed = _extract_sql(chat_completion(messages))

@@ -9,8 +9,12 @@ from app.config import get_settings
 from app.log.logging import log_event
 
 
-def chat_completion(messages: list[dict], *, temperature: float = 0) -> str:
+def chat_completion(
+    messages: list[dict], *, temperature: float | None = None
+) -> str:
     settings = get_settings()
+    if temperature is None:
+        temperature = settings.llm_temperature
     if not settings.openai_api_key.strip():
         raise ValueError(
             "LLM api_key is not configured; set llm.api_key in config.yaml"
@@ -53,9 +57,11 @@ def chat_completion_with_tools(
     messages: list[dict],
     tools: list[dict],
     *,
-    temperature: float = 0,
+    temperature: float | None = None,
 ) -> dict:
     settings = get_settings()
+    if temperature is None:
+        temperature = settings.llm_temperature
     if not settings.openai_api_key.strip():
         raise ValueError(
             "LLM api_key is not configured; set llm.api_key in config.yaml"

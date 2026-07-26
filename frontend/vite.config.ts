@@ -15,11 +15,17 @@ function loadAppConfig() {
   const raw = YAML.parse(fs.readFileSync(file, 'utf8')) ?? {}
   const frontend = raw.frontend ?? {}
   const backend = raw.backend ?? {}
+  const memory = backend.memory ?? {}
   return {
+    host: String(frontend.host ?? '0.0.0.0'),
     port: Number(frontend.port ?? 5173),
     // 缺省空串：走 Vite /api 代理；显式配置时可直连后端
     apiBaseUrl: String(frontend.api_base_url ?? ''),
     backendPort: Number(backend.port ?? 8000),
+    tablesPageSize: Number(
+      frontend.tables_page_size ?? backend.tables_page_size ?? 50,
+    ),
+    sessionTitleMaxChars: Number(memory.session_title_max_chars ?? 10),
   }
 }
 
@@ -32,6 +38,8 @@ function appConfigPlugin(): Plugin {
   const payload = {
     apiBaseUrl: appConfig.apiBaseUrl,
     backendPort: appConfig.backendPort,
+    tablesPageSize: appConfig.tablesPageSize,
+    sessionTitleMaxChars: appConfig.sessionTitleMaxChars,
   }
   return {
     name: 'app-config',
@@ -51,8 +59,7 @@ export default defineConfig({
   plugins: [appConfigPlugin(), react()],
   server: {
     port: appConfig.port,
-    // 0.0.0.0 便于局域网用本机 IP（如 192.168.1.120）访问
-    host: '0.0.0.0',
+    host: appConfig.host,
     // 同源 /api → 后端，浏览器不必直连 :8000（避免局域网/防火墙 Failed to fetch）
     proxy: {
       '/api': {

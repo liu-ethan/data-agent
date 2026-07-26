@@ -5,6 +5,7 @@ from app.agent.memory.summarize import build_result_summary
 from app.agent.memory.title import generate_session_title
 from app.agent.memory.turn_display import build_display_payload
 from app.agent.state import AgentState
+from app.config import get_settings
 
 
 def memory_save(state: AgentState) -> dict:
@@ -55,7 +56,8 @@ def memory_save(state: AgentState) -> dict:
         if not existing:
             title = generate_session_title(question, result_summary)
             if store.set_session_title_if_empty(session_id, user_id, title):
-                out["session_title"] = title[:10]
+                max_chars = get_settings().memory_session_title_max_chars
+                out["session_title"] = title[:max_chars]
     except store.MemoryError:
         pass
 

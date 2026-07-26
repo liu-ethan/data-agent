@@ -6,8 +6,9 @@ import {
   type TablePage,
   type TableSummary,
 } from '../api/tables'
+import { appConfig } from '../config'
 
-const PAGE_SIZE = 50
+const PAGE_SIZE = appConfig.tablesPageSize
 
 export default function TablesPage() {
   const navigate = useNavigate()

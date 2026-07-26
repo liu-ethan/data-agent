@@ -13,11 +13,16 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from app.config import REPO_ROOT
+from app.config import get_settings
 
-MAX_LOG_BYTES = 10 * 1024 * 1024
 _request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
 _write_lock = threading.Lock()
+
+
+def __getattr__(name: str):
+    if name == "MAX_LOG_BYTES":
+        return get_settings().logging_max_bytes
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def get_request_id() -> str | None:
@@ -29,7 +34,7 @@ def set_request_id(request_id: str) -> None:
 
 
 def app_log_dir() -> Path:
-    return REPO_ROOT / "logs"
+    return get_settings().logging_dir_path
 
 
 def _today_str() -> str:
@@ -44,11 +49,13 @@ def resolve_app_log_path(
     *,
     day: str | None = None,
     log_dir: Path | None = None,
-    max_bytes: int = MAX_LOG_BYTES,
+    max_bytes: int | None = None,
 ) -> Path:
     """Return active app log path: YYYY-MM-DD.log, then YYYY-MM-DD_N.log when full."""
     day = day or _today_str()
     directory = log_dir if log_dir is not None else app_log_dir()
+    if max_bytes is None:
+        max_bytes = get_settings().logging_max_bytes
     directory.mkdir(parents=True, exist_ok=True)
 
     candidates = [directory / f"{day}.log"]

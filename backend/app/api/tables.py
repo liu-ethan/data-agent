@@ -3,11 +3,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.auth.deps import get_current_user
+from app.config import get_settings
 from app.db.database import get_connection
 from app.db.schema import BUSINESS_TABLES, SENSITIVE_USER_COLUMNS
 
 router = APIRouter(prefix="/tables", tags=["tables"])
-PAGE_SIZE = 50
 
 
 def _columns_for(conn, name: str, role: str) -> list[dict]:
@@ -44,11 +44,11 @@ def get_table(
     name: str,
     user: Annotated[dict, Depends(get_current_user)],
     page: int = Query(1, ge=1),
-    page_size: int = Query(PAGE_SIZE),
+    page_size: int = Query(50),
 ):
     if name not in BUSINESS_TABLES:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Table not found")
-    page_size = PAGE_SIZE
+    page_size = get_settings().tables_page_size
     conn = get_connection()
     try:
         columns = _columns_for(conn, name, user["role"])

@@ -11,6 +11,7 @@ from app.agent.vocab import (
     METRIC_VOCAB,
     TIME_RANGE_VOCAB,
 )
+from app.prompts import render
 
 _ROUTE_MODES = frozenset({"react", "coordinator"})
 _JSON_FENCE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
@@ -38,29 +39,6 @@ def build_intent_prompt(
     dimensions = ", ".join(sorted(DIMENSION_VOCAB))
     time_ranges = ", ".join(sorted(TIME_RANGE_VOCAB))
 
-    system = f"""你是电商经营分析问题意图分析器。根据用户问题输出 JSON。
-
-intent 封闭枚举: {intent_list}
-
-METRIC 词表（slots.metrics 元素）: {metrics}
-DIMENSION / group_by 词表: {dimensions}
-TIME_RANGE 词表（slots.time_range）: {time_ranges}
-
-route_mode 说明:
-- react: 单指标、TopN、路径清晰
-- coordinator: 多指标对比、归因、多步协作
-
-默认口径: GMV 默认支付金额，不必为此澄清。
-
-输出 JSON 对象字段:
-- intent (string)
-- confidence (number 0-1)
-- summary (string)
-- route_mode ("react" | "coordinator")
-- slots: {{ "metrics": string[], "time_range": string|null, "group_by": string[], "top_n": number|null, "write_intent": bool, "filters": object|null }}
-- need_clarification (bool)
-- clarification_question (string|null)
-"""
     context_lines = []
     if session_slots:
         context_lines.append(_context_line("会话槽位", session_slots))
@@ -68,15 +46,24 @@ route_mode 说明:
         context_lines.append(_context_line("用户偏好", preferences))
     if recent_summaries:
         context_lines.append(_context_line("近期分析", recent_summaries))
-    user_content = question
+    context_block = ""
     if context_lines:
-        user_content += (
+        context_block = (
             "\n\n参考上下文（仅用于理解追问，不覆盖用户明确表达）:\n"
             + "\n".join(context_lines)
         )
+    parts = render(
+        "intent_analyzer",
+        intent_list=intent_list,
+        metrics=metrics,
+        dimensions=dimensions,
+        time_ranges=time_ranges,
+        question=question,
+        context_block=context_block,
+    )
     return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user_content},
+        {"role": "system", "content": parts["system"]},
+        {"role": "user", "content": parts["user"]},
     ]
 
 

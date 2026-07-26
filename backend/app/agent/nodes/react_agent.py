@@ -6,21 +6,22 @@ import re
 from app.agent.llm import chat_completion_with_tools
 from app.agent.state import AgentState
 from app.agent.nodes.react_tools import build_react_openai_tools
+from app.config import get_settings
+from app.prompts import render
 
 _SQL_FENCE = re.compile(r"```(?:sql)?\s*([\s\S]*?)```", re.IGNORECASE)
 
 
 def _initial_messages(state: AgentState) -> list[dict]:
-    slots = json.dumps(state.get("slots") or {}, ensure_ascii=False)
-    system_prompt = (
-        "You are a SQLite data analyst. Use the available tools to inspect schema, "
-        "retrieve metric definitions, and validate SQL. You must call propose_sql "
-        "with one final read-only SELECT or WITH query; never execute SQL yourself. "
-        f"Merged analysis slots: {slots}"
+    slots_json = json.dumps(state.get("slots") or {}, ensure_ascii=False)
+    parts = render(
+        "react_agent",
+        slots_json=slots_json,
+        question=state.get("question") or "",
     )
     return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": state.get("question") or ""},
+        {"role": "system", "content": parts["system"]},
+        {"role": "user", "content": parts["user"]},
     ]
 
 
@@ -53,9 +54,10 @@ def _extract_sql(content: str | None) -> str | None:
 
 
 def react_agent(state: AgentState) -> dict:
-    if int(state.get("react_step") or 0) >= 5:
+    max_steps = get_settings().agent_react_max_steps
+    if int(state.get("react_step") or 0) >= max_steps:
         return {
-            "error": "ReAct exceeded the maximum of 5 tool steps",
+            "error": f"ReAct exceeded the maximum of {max_steps} tool steps",
             "pending_tool_calls": [],
         }
 
@@ -64,7 +66,6 @@ def react_agent(state: AgentState) -> dict:
         completion = chat_completion_with_tools(
             messages,
             build_react_openai_tools(),
-            temperature=0,
         )
     except Exception as exc:
         return {

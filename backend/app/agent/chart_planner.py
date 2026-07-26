@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 
 from app.agent.llm import chat_completion
+from app.prompts import render
 
 _CHART_TYPES = frozenset({"line", "bar", "pie", "table"})
 _JSON_FENCE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
@@ -57,19 +58,13 @@ def _build_messages(
         "slots": slots,
         "title_hint": title_hint,
     }
-    system = (
-        "你是图表规划器。根据查询结果选择图表，只输出 JSON 对象，字段："
-        'type(line|bar|pie|table), x(列名), y(列名), title(短中文), '
-        "series(可选，数值列名数组，多指标趋势时填写)。"
-        "趋势用 line，TopN/分类对比用 bar，占比用 pie，明细用 table。"
-        "x/y 必须是 columns 中的列名；多指标趋势（如订单量+GMV）用 line 并填 series。"
+    parts = render(
+        "chart_planner",
+        payload_json=json.dumps(payload, ensure_ascii=False),
     )
     return [
-        {"role": "system", "content": system},
-        {
-            "role": "user",
-            "content": json.dumps(payload, ensure_ascii=False),
-        },
+        {"role": "system", "content": parts["system"]},
+        {"role": "user", "content": parts["user"]},
     ]
 
 

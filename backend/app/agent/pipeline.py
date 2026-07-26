@@ -5,6 +5,7 @@ from collections.abc import Iterator
 
 from app.agent.graph import build_graph
 from app.agent.state import AgentState
+from app.config import get_settings
 from app.log.logging import log_event
 
 
@@ -190,7 +191,9 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
                             "session_id": str(
                                 merged.get("session_id") or ""
                             ),
-                            "title": str(title)[:10],
+                            "title": str(title)[
+                                : get_settings().memory_session_title_max_chars
+                            ],
                         }
                         log_event(
                             "INFO",

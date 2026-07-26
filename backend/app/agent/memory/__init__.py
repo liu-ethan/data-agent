@@ -1,7 +1,5 @@
 from app.agent.memory.merge import merge_slots
 from app.agent.memory.store import (
-    MAX_SUMMARIES_PER_USER,
-    MAX_TURNS_PER_SESSION,
     MemoryError,
     append_summary,
     assert_session_owner,
@@ -23,6 +21,16 @@ from app.agent.memory.summarize import (
     merge_preferences,
     strip_sensitive,
 )
+from app.config import get_settings
+
+
+def __getattr__(name: str):
+    if name == "MAX_TURNS_PER_SESSION":
+        return get_settings().memory_max_turns_per_session
+    if name == "MAX_SUMMARIES_PER_USER":
+        return get_settings().memory_max_summaries_per_user
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "MAX_SUMMARIES_PER_USER",

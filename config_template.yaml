@@ -6,11 +6,13 @@ llm:
   api_key: ""
   base_url: ""
   model: ""
+  temperature: 0
 
 backend:
   host: "0.0.0.0"
   port: 8000
   jwt_secret: "change-me"
+  jwt_expire_days: 7
   admin_invite_code: "your-invite-code"
   # 相对 backend/ 目录；也可写绝对路径
   database_path: "data/ecommerce.db"
@@ -20,7 +22,34 @@ backend:
     # 局域网访问时补上前端源，例如：
     # - "http://192.168.x.x:5173"
 
+  sandbox:
+    max_select_rows: 100
+    max_write_rows: 100
+    connect_timeout_s: 5.0
+
+  memory:
+    max_turns_per_session: 10
+    max_summaries_per_user: 20
+    recent_summaries_limit: 5
+    session_title_max_chars: 10
+
+  agent:
+    react_max_steps: 5
+
+  logging:
+    # 相对仓库根目录；也可写绝对路径
+    dir: "logs"
+    max_bytes: 10485760  # 10MB
+
+  # 相对仓库根目录；也可写绝对路径
+  audit_path: "logs/audit.jsonl"
+
+  tables_page_size: 50
+  display_max_rows: 100
+
 frontend:
+  host: "0.0.0.0"
   port: 5173
   # 空字符串 = 同源走 Vite /api 代理（推荐）；直连后端时写完整基址（勿尾斜杠）
   api_base_url: ""
+  tables_page_size: 50

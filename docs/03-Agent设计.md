@@ -185,6 +185,8 @@ IntentAnalyzer 的 prompt **只放**：
 
 **禁止**在本阶段放入：全部表结构、全部列名、样例行。全量/相关 Schema 仅出现在 SchemaRetriever / SQLGenerator。
 
+文案外置：`backend/app/prompts/intent_analyzer.yaml`（经 `app.prompts.render` 加载）；本阶段仍禁止灌全库 Schema。
+
 #### 结构化输出示例
 
 用户问题：`上个月 GMV 最高的 5 个渠道是什么？`
