@@ -33,10 +33,14 @@ def plan_chart(
             parsed = _parse_json(raw)
             validated = _validate_chart(parsed, columns, sample)
             if validated is not None:
-                return validated
+                return _enrich_line_series(validated, columns, sample)
         except Exception:
             pass
-    return _heuristic_chart(question, columns, sample, title_hint)
+    return _enrich_line_series(
+        _heuristic_chart(question, columns, sample, title_hint),
+        columns,
+        sample,
+    )
 
 
 def _build_messages(
@@ -55,9 +59,10 @@ def _build_messages(
     }
     system = (
         "你是图表规划器。根据查询结果选择图表，只输出 JSON 对象，字段："
-        'type(line|bar|pie|table), x(列名), y(列名), title(短中文)。'
+        'type(line|bar|pie|table), x(列名), y(列名), title(短中文), '
+        "series(可选，数值列名数组，多指标趋势时填写)。"
         "趋势用 line，TopN/分类对比用 bar，占比用 pie，明细用 table。"
-        "x/y 必须是 columns 中的列名。"
+        "x/y 必须是 columns 中的列名；多指标趋势（如订单量+GMV）用 line 并填 series。"
     )
     return [
         {"role": "system", "content": system},
@@ -108,7 +113,11 @@ def _validate_chart(
         return None
     if not _column_mostly_numeric(sample, y):
         return None
-    return {"type": ctype, "x": x, "y": y, "title": title}
+    series = _normalize_series(data.get("series"), columns, sample, y)
+    out = {"type": ctype, "x": x, "y": y, "title": title}
+    if series:
+        out["series"] = series
+    return out
 
 
 def _heuristic_chart(
@@ -122,9 +131,12 @@ def _heuristic_chart(
     num_cols = [c for c in columns if _column_mostly_numeric(sample, c)]
     cat_cols = [c for c in columns if c not in num_cols]
     if date_col and num_cols:
-        y = next((c for c in num_cols if c != date_col), None)
-        if y:
-            return {"type": "line", "x": date_col, "y": y, "title": title}
+        y_cols = [c for c in num_cols if c != date_col]
+        if y_cols:
+            chart = {"type": "line", "x": date_col, "y": y_cols[0], "title": title}
+            if len(y_cols) > 1:
+                chart["series"] = y_cols
+            return chart
     share_cols = [c for c in num_cols if _SHARE_NAME.search(c)]
     if share_cols and cat_cols:
         y = share_cols[0]
@@ -157,6 +169,50 @@ def _heuristic_chart(
         "y": columns[1] if len(columns) > 1 else "",
         "title": title,
     }
+
+
+def _enrich_line_series(
+    chart: dict, columns: list[str], sample: list[dict]
+) -> dict:
+    if chart.get("type") != "line":
+        return chart
+    x = str(chart.get("x") or "")
+    num_cols = [
+        c
+        for c in columns
+        if c != x and _column_mostly_numeric(sample, c)
+    ]
+    if len(num_cols) <= 1:
+        return chart
+    out = dict(chart)
+    if not out.get("series"):
+        out["series"] = num_cols
+    if out.get("y") not in num_cols:
+        out["y"] = num_cols[0]
+    return out
+
+
+def _normalize_series(
+    raw: object,
+    columns: list[str],
+    sample: list[dict],
+    primary_y: str,
+) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    series: list[str] = []
+    for item in raw:
+        name = str(item or "").strip()
+        if (
+            name
+            and name in columns
+            and name not in series
+            and _column_mostly_numeric(sample, name)
+        ):
+            series.append(name)
+    if primary_y not in series and primary_y in columns:
+        series.insert(0, primary_y)
+    return series if len(series) > 1 else []
 
 
 def _find_date_column(columns: list[str], sample: list[dict]) -> str | None:

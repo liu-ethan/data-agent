@@ -19,9 +19,11 @@ export type ChartConfig = {
   x: string
   y: string
   title?: string
+  series?: string[]
 }
 
 const PIE_COLORS = ['#0F766E', '#B45309', '#1D4ED8', '#BE123C', '#4338CA', '#047857']
+const LINE_COLORS = ['#0F766E', '#B45309', '#1D4ED8', '#BE123C']
 
 type Props = {
   chart: ChartConfig | null
@@ -33,10 +35,23 @@ export default function ResultChart({ chart, rows }: Props) {
     return null
   }
 
-  const data = rows.map((row) => ({
-    ...row,
-    [chart.y]: toNumber(row[chart.y]),
-  }))
+  const seriesKeys =
+    Array.isArray(chart.series) && chart.series.length > 0
+      ? chart.series.filter(Boolean)
+      : [chart.y]
+
+  const data = rows.map((row) => {
+    const next: Record<string, unknown> = { ...row }
+    for (const key of seriesKeys) {
+      next[key] = toNumber(row[key])
+    }
+    return next
+  })
+
+  const useDualAxis =
+    chart.type === 'line' &&
+    seriesKeys.length > 1 &&
+    scalesDiffer(data, seriesKeys[0], seriesKeys[1])
 
   return (
     <section className="rounded-xl border border-line bg-surface p-4">
@@ -50,16 +65,35 @@ export default function ResultChart({ chart, rows }: Props) {
             <LineChart data={data}>
               <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
               <XAxis dataKey={chart.x} tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
+              <YAxis
+                yAxisId="left"
+                tick={{ fontSize: 11 }}
+                width={48}
+              />
+              {useDualAxis && (
+                <YAxis
+                  yAxisId="right"
+                  orientation="right"
+                  tick={{ fontSize: 11 }}
+                  width={56}
+                />
+              )}
               <Tooltip />
               <Legend />
-              <Line
-                type="monotone"
-                dataKey={chart.y}
-                stroke="#0F766E"
-                strokeWidth={2}
-                dot={false}
-              />
+              {seriesKeys.map((key, index) => (
+                <Line
+                  key={key}
+                  type="monotone"
+                  yAxisId={
+                    useDualAxis && index > 0 ? 'right' : 'left'
+                  }
+                  dataKey={key}
+                  name={key}
+                  stroke={LINE_COLORS[index % LINE_COLORS.length]}
+                  strokeWidth={2}
+                  dot={false}
+                />
+              ))}
             </LineChart>
           ) : chart.type === 'pie' ? (
             <PieChart>
@@ -84,13 +118,33 @@ export default function ResultChart({ chart, rows }: Props) {
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip />
               <Legend />
-              <Bar dataKey={chart.y} fill="#0F766E" radius={[4, 4, 0, 0]} />
+              {seriesKeys.map((key, index) => (
+                <Bar
+                  key={key}
+                  dataKey={key}
+                  name={key}
+                  fill={LINE_COLORS[index % LINE_COLORS.length]}
+                  radius={[4, 4, 0, 0]}
+                />
+              ))}
             </BarChart>
           )}
         </ResponsiveContainer>
       </div>
     </section>
   )
+}
+
+function scalesDiffer(
+  data: Record<string, unknown>[],
+  a: string,
+  b: string,
+): boolean {
+  const maxA = Math.max(...data.map((row) => Math.abs(toNumber(row[a]))), 0)
+  const maxB = Math.max(...data.map((row) => Math.abs(toNumber(row[b]))), 0)
+  if (maxA === 0 || maxB === 0) return false
+  const ratio = Math.max(maxA, maxB) / Math.min(maxA, maxB)
+  return ratio >= 10
 }
 
 function toNumber(value: unknown): number {

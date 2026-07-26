@@ -24,6 +24,7 @@ class AgentState(TypedDict, total=False):
     session_slots: dict | None
     user_preferences: dict | None
     recent_summaries: list[dict] | None
+    session_title: str | None
 
     # ReAct
     react_messages: list[dict] | None

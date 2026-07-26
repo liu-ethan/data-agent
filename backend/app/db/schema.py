@@ -155,6 +155,7 @@ DDL_STATEMENTS: list[str] = [
         filters_json TEXT,
         group_by_json TEXT,
         result_summary TEXT,
+        display_json TEXT,
         created_at TEXT NOT NULL
     )
     """,
@@ -183,4 +184,16 @@ DDL_STATEMENTS: list[str] = [
 def apply_schema(conn: sqlite3.Connection) -> None:
     for stmt in DDL_STATEMENTS:
         conn.execute(stmt)
+    _ensure_column(conn, "session_turns", "display_json", "TEXT")
     conn.commit()
+
+
+def _ensure_column(
+    conn: sqlite3.Connection, table: str, column: str, typedef: str
+) -> None:
+    cols = {
+        str(row[1])
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typedef}")

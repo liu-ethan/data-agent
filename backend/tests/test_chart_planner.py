@@ -131,3 +131,21 @@ def test_node_calls_plan_chart():
         )
     m.assert_called_once()
     assert out == {"chart": chart}
+
+
+def test_heuristic_multi_metric_trend_sets_series():
+    cols = ["order_date", "order_count", "gmv"]
+    rows = [
+        {"order_date": "2026-06-26", "order_count": 3, "gmv": 100},
+        {"order_date": "2026-06-27", "order_count": 2, "gmv": 200},
+    ]
+    with patch(
+        "app.agent.chart_planner.chat_completion",
+        side_effect=RuntimeError("skip llm"),
+    ):
+        out = plan_chart("最近 30 天每天的订单量和 GMV 趋势如何？", cols, rows)
+    assert out is not None
+    assert out["type"] == "line"
+    assert out["x"] == "order_date"
+    assert out["y"] == "order_count"
+    assert out["series"] == ["order_count", "gmv"]

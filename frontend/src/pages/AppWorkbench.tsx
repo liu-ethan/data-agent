@@ -2,23 +2,26 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiFetch } from '../api/client'
 import { streamChat } from '../api/chat'
+import {
+  createSession,
+  deleteSession,
+  listSessions,
+  listSessionTurns,
+  type SessionSummary,
+  type SessionTurn,
+} from '../api/sessions'
 import { useAuth } from '../auth/AuthContext'
-import ResultChart, { type ChartConfig } from '../components/ResultChart'
+import TurnCard, { type TurnView } from '../components/TurnCard'
 
 interface ExampleItem {
   id: string
   question: string
 }
 
-interface SchemaTable {
-  name: string
-  columns: { name: string; type: string; nullable: boolean }[]
-}
-
-interface TraceEntry {
-  id: number
-  event: string
-  summary: string
+type InitialData = {
+  sessions: SessionSummary[]
+  currentSessionId: string
+  turns: TurnView[]
 }
 
 export default function AppWorkbench() {
@@ -26,163 +29,389 @@ export default function AppWorkbench() {
   const { user, logout } = useAuth()
 
   const [examples, setExamples] = useState<ExampleItem[]>([])
-  const [tables, setTables] = useState<SchemaTable[]>([])
-  const [sideError, setSideError] = useState<string | null>(null)
-
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  const [turns, setTurns] = useState<TurnView[]>([])
   const [question, setQuestion] = useState('')
   const [streaming, setStreaming] = useState(false)
-  const [answer, setAnswer] = useState('')
-  const [sql, setSql] = useState('')
-  const [sqlRepaired, setSqlRepaired] = useState(false)
-  const [columns, setColumns] = useState<string[]>([])
-  const [rows, setRows] = useState<Record<string, unknown>[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [errorTraceId, setErrorTraceId] = useState<string | null>(null)
-  const [trace, setTrace] = useState<TraceEntry[]>([])
-  const [traceOpen, setTraceOpen] = useState(false)
-  const [latencyMs, setLatencyMs] = useState<number | null>(null)
-  const [guardrailPassed, setGuardrailPassed] = useState(false)
-  const [clarificationHint, setClarificationHint] = useState<string | null>(
-    null,
-  )
-  const [chart, setChart] = useState<ChartConfig | null>(null)
-  const [writeResult, setWriteResult] = useState<{
-    affected_rows: number | null
-    sql: string
-  } | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [sideError, setSideError] = useState<string | null>(null)
 
   const abortRef = useRef<AbortController | null>(null)
-  const traceIdRef = useRef(0)
-  const runTraceIdRef = useRef<string | null>(null)
+  const activeRunRef = useRef<string | null>(null)
+  const loadSequenceRef = useRef(0)
+  const sessionLoadingRef = useRef(true)
+  const turnIdRef = useRef(0)
+  const initialLoadRef = useRef<Promise<InitialData> | null>(null)
+  const examplesLoadRef = useRef<Promise<ExampleItem[]> | null>(null)
+  const sessionsRef = useRef<SessionSummary[]>([])
+  const currentSessionIdRef = useRef<string | null>(null)
+  const deletingRef = useRef(false)
+
+  useEffect(() => {
+    sessionsRef.current = sessions
+  }, [sessions])
+
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId
+  }, [currentSessionId])
 
   useEffect(() => {
     let cancelled = false
-    ;(async () => {
-      try {
-        const [exRes, schRes] = await Promise.all([
-          apiFetch('/api/examples'),
-          apiFetch('/api/schema'),
-        ])
-        if (!exRes.ok || !schRes.ok) {
-          throw new Error('加载示例或表结构失败')
+    const sequence = loadSequenceRef.current + 1
+    loadSequenceRef.current = sequence
+    setSessionLoading(true)
+
+    if (!initialLoadRef.current) {
+      initialLoadRef.current = loadInitialData()
+    }
+
+    initialLoadRef.current
+      .then((data) => {
+        if (cancelled || loadSequenceRef.current !== sequence) return
+        updateSessions(data.sessions)
+        updateCurrentSessionId(data.currentSessionId)
+        setTurns(data.turns)
+      })
+      .catch((error) => {
+        if (!cancelled && loadSequenceRef.current === sequence) {
+          setSideError(
+            error instanceof Error ? error.message : '工作台加载失败',
+          )
         }
-        const exData = await exRes.json()
-        const schData = await schRes.json()
-        if (cancelled) return
-        setExamples(exData.examples ?? [])
-        setTables(schData.tables ?? [])
-      } catch (e) {
-        if (!cancelled) {
-          setSideError(e instanceof Error ? e.message : '侧栏数据加载失败')
+      })
+      .finally(() => {
+        if (!cancelled && loadSequenceRef.current === sequence) {
+          setSessionLoading(false)
         }
-      }
-    })()
+      })
+
     return () => {
       cancelled = true
       abortRef.current?.abort()
     }
   }, [])
 
-  function handleLogout() {
+  useEffect(() => {
+    let cancelled = false
+
+    if (!examplesLoadRef.current) {
+      examplesLoadRef.current = loadExamples()
+    }
+
+    examplesLoadRef.current
+      .then((items) => {
+        if (!cancelled) setExamples(items)
+      })
+      .catch(() => {
+        if (!cancelled) setExamples([])
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  function setSessionLoading(value: boolean) {
+    sessionLoadingRef.current = value
+    setLoading(value)
+  }
+
+  function updateSessions(
+    updater:
+      | SessionSummary[]
+      | ((previous: SessionSummary[]) => SessionSummary[]),
+  ) {
+    const next =
+      typeof updater === 'function'
+        ? updater(sessionsRef.current)
+        : updater
+    sessionsRef.current = next
+    setSessions(next)
+  }
+
+  function updateCurrentSessionId(sessionId: string | null) {
+    currentSessionIdRef.current = sessionId
+    setCurrentSessionId(sessionId)
+  }
+
+  function stopActiveStream() {
     abortRef.current?.abort()
+    abortRef.current = null
+    activeRunRef.current = null
+    setStreaming(false)
+    setTurns((previous) =>
+      previous.map((turn) =>
+        turn.streaming ? { ...turn, streaming: false } : turn,
+      ),
+    )
+  }
+
+  async function handleNewSession() {
+    if (deletingRef.current) return
+
+    stopActiveStream()
+    const sequence = loadSequenceRef.current + 1
+    loadSequenceRef.current = sequence
+    setSessionLoading(true)
+    setSideError(null)
+    try {
+      const session = await createSession()
+      if (loadSequenceRef.current !== sequence) return
+      updateSessions((previous) => [
+        session,
+        ...previous.filter((item) => item.id !== session.id),
+      ])
+      updateCurrentSessionId(session.id)
+      setTurns([])
+    } catch (error) {
+      if (loadSequenceRef.current === sequence) {
+        setSideError(
+          error instanceof Error ? error.message : '创建会话失败',
+        )
+      }
+    } finally {
+      if (loadSequenceRef.current === sequence) setSessionLoading(false)
+    }
+  }
+
+  async function handleSwitchSession(sessionId: string) {
+    if (deletingRef.current) return
+    if (sessionId === currentSessionIdRef.current) return
+
+    stopActiveStream()
+    const sequence = loadSequenceRef.current + 1
+    loadSequenceRef.current = sequence
+    updateCurrentSessionId(sessionId)
+    setTurns([])
+    setSessionLoading(true)
+    setSideError(null)
+
+    try {
+      const history = await listSessionTurns(sessionId)
+      if (
+        loadSequenceRef.current !== sequence ||
+        activeRunRef.current !== null
+      ) {
+        return
+      }
+      setTurns(mapHistoryTurns(sessionId, history))
+    } catch (error) {
+      if (loadSequenceRef.current === sequence) {
+        setSideError(
+          error instanceof Error ? error.message : '加载会话轮次失败',
+        )
+      }
+    } finally {
+      if (loadSequenceRef.current === sequence) setSessionLoading(false)
+    }
+  }
+
+  async function handleDeleteSession(sessionId: string) {
+    if (deletingRef.current) return
+    if (!window.confirm('确定删除该会话？删除后不可恢复。')) return
+
+    deletingRef.current = true
+    let operationSequence: number | null = null
+    setSideError(null)
+    try {
+      if (sessionId === currentSessionIdRef.current) stopActiveStream()
+      await deleteSession(sessionId)
+      const remainingSessions = sessionsRef.current.filter(
+        (session) => session.id !== sessionId,
+      )
+      updateSessions(remainingSessions)
+
+      if (sessionId !== currentSessionIdRef.current) return
+      if (remainingSessions.length > 0) {
+        stopActiveStream()
+        const fallbackSessionId = remainingSessions[0].id
+        const sequence = loadSequenceRef.current + 1
+        operationSequence = sequence
+        loadSequenceRef.current = sequence
+        updateCurrentSessionId(fallbackSessionId)
+        setTurns([])
+        setSessionLoading(true)
+        const history = await listSessionTurns(fallbackSessionId)
+        if (
+          loadSequenceRef.current === sequence &&
+          activeRunRef.current === null
+        ) {
+          setTurns(mapHistoryTurns(fallbackSessionId, history))
+        }
+        return
+      }
+
+      stopActiveStream()
+      operationSequence = loadSequenceRef.current + 1
+      loadSequenceRef.current = operationSequence
+      updateCurrentSessionId(null)
+      setTurns([])
+      setSessionLoading(true)
+      const session = await createSession()
+      if (loadSequenceRef.current !== operationSequence) return
+      updateSessions([session])
+      updateCurrentSessionId(session.id)
+    } catch (error) {
+      setSideError(
+        error instanceof Error ? error.message : '删除会话失败',
+      )
+    } finally {
+      if (
+        operationSequence !== null &&
+        loadSequenceRef.current === operationSequence
+      ) {
+        setSessionLoading(false)
+      }
+      deletingRef.current = false
+    }
+  }
+
+  function handleLogout() {
+    stopActiveStream()
     logout()
     navigate('/')
   }
 
-  function resetResult() {
-    setAnswer('')
-    setSql('')
-    setSqlRepaired(false)
-    setColumns([])
-    setRows([])
-    setError(null)
-    setErrorTraceId(null)
-    setTrace([])
-    setLatencyMs(null)
-    setGuardrailPassed(false)
-    setClarificationHint(null)
-    setChart(null)
-    setWriteResult(null)
-    traceIdRef.current = 0
-    runTraceIdRef.current = null
+  function toggleTurnSection(
+    turnId: string,
+    section: keyof TurnView['open'],
+  ) {
+    updateTurn(turnId, (turn) => ({
+      ...turn,
+      open: { ...turn.open, [section]: !turn.open[section] },
+    }))
   }
 
-  function pushTrace(event: string, summary: string) {
-    traceIdRef.current += 1
-    setTrace((prev) => [
-      ...prev,
-      { id: traceIdRef.current, event, summary },
-    ])
+  function updateTurn(
+    turnId: string,
+    updater: (turn: TurnView) => TurnView,
+  ) {
+    setTurns((previous) =>
+      previous.map((turn) =>
+        turn.id === turnId ? updater(turn) : turn,
+      ),
+    )
   }
 
-  async function handleSubmit(e?: FormEvent) {
-    e?.preventDefault()
-    const q = question.trim()
-    if (!q || streaming || !user) return
+  function pushTrace(turnId: string, event: string, summary: string) {
+    updateTurn(turnId, (turn) => ({
+      ...turn,
+      trace: [
+        ...turn.trace,
+        {
+          id: (turn.trace[turn.trace.length - 1]?.id ?? 0) + 1,
+          event,
+          summary,
+        },
+      ],
+    }))
+  }
 
+  async function handleSubmit(event?: FormEvent) {
+    event?.preventDefault()
+    const submittedQuestion = question.trim()
+    if (
+      !submittedQuestion ||
+      streaming ||
+      activeRunRef.current !== null ||
+      sessionLoadingRef.current ||
+      !user ||
+      !currentSessionId
+    ) {
+      return
+    }
+
+    loadSequenceRef.current += 1
     abortRef.current?.abort()
-    const ac = new AbortController()
-    abortRef.current = ac
+    const controller = new AbortController()
+    abortRef.current = controller
+    turnIdRef.current += 1
+    const turnId = `${currentSessionId}-live-${turnIdRef.current}`
+    let runTraceId: string | null = null
 
-    resetResult()
+    activeRunRef.current = turnId
     setStreaming(true)
-    setTraceOpen(true)
+    setQuestion('')
+    setTurns((previous) => [
+      ...previous,
+      createEmptyTurn(turnId, submittedQuestion),
+    ])
 
     try {
       await streamChat({
-        question: q,
-        // session 按 user 隔离；勿用全局 "default"（会被其他用户占用）
-        sessionId: `default-${user.id}`,
-        signal: ac.signal,
-        onEvent: (event, data) => {
-          switch (event) {
+        question: submittedQuestion,
+        sessionId: currentSessionId,
+        signal: controller.signal,
+        onEvent: (sseEvent, data) => {
+          switch (sseEvent) {
             case 'run_start':
-              runTraceIdRef.current = data.trace_id
+              runTraceId = data.trace_id
                 ? String(data.trace_id)
                 : data.request_id
                   ? String(data.request_id)
                   : null
               pushTrace(
-                event,
+                turnId,
+                sseEvent,
                 `trace ${String(data.trace_id ?? data.request_id ?? '')}`.trim(),
               )
               break
             case 'node_start':
-              pushTrace(event, `开始 ${String(data.node ?? '')}`)
+              pushTrace(
+                turnId,
+                sseEvent,
+                `开始 ${String(data.node ?? '')}`,
+              )
               break
             case 'node_end': {
               const node = String(data.node ?? '')
               const summary = String(data.summary ?? '完成')
-              pushTrace(event, `${node}: ${summary}`)
               if (node === 'SQLGuardrail' && summary !== 'rejected') {
-                setGuardrailPassed(true)
+                updateTurn(turnId, (turn) => ({
+                  ...turn,
+                  guardrailPassed: true,
+                }))
               }
+              pushTrace(turnId, sseEvent, `${node}: ${summary}`)
               break
             }
             case 'sql':
-              setSql(String(data.sql ?? ''))
-              setSqlRepaired(Boolean(data.repaired))
-              pushTrace(event, '收到 SQL')
+              updateTurn(turnId, (turn) => ({
+                ...turn,
+                sql: String(data.sql ?? ''),
+                sqlRepaired: Boolean(data.repaired),
+              }))
+              pushTrace(turnId, sseEvent, '收到 SQL')
               break
             case 'rows': {
-              const cols = Array.isArray(data.columns)
+              const columns = Array.isArray(data.columns)
                 ? (data.columns as string[])
                 : []
-              const rowList = Array.isArray(data.rows)
+              const rows = Array.isArray(data.rows)
                 ? (data.rows as Record<string, unknown>[])
                 : []
-              setColumns(cols)
-              setRows(rowList)
-              pushTrace(event, `${rowList.length} 行`)
+              updateTurn(turnId, (turn) => ({
+                ...turn,
+                columns,
+                rows,
+                guardrailPassed: true,
+                open: { ...turn.open, rows: true },
+              }))
+              pushTrace(turnId, sseEvent, `${rows.length} 行`)
               break
             }
             case 'answer':
-              setAnswer(String(data.text ?? ''))
-              pushTrace(event, '结论已生成')
+              updateTurn(turnId, (turn) => ({
+                ...turn,
+                answer: String(data.text ?? ''),
+              }))
+              pushTrace(turnId, sseEvent, '结论已生成')
               break
             case 'tool_start':
               pushTrace(
-                event,
+                turnId,
+                sseEvent,
                 `调用 ${String(data.tool ?? '')}`.trim(),
               )
               break
@@ -190,30 +419,42 @@ export default function AppWorkbench() {
               const riskPrefix =
                 data.risk_level === 'high' ? '⚠ high · ' : ''
               pushTrace(
-                event,
+                turnId,
+                sseEvent,
                 `${riskPrefix}${String(data.tool ?? '')}: ${String(data.status ?? 'done')}`,
               )
               break
             }
             case 'chart':
-              setChart({
-                type: String(data.type ?? 'table'),
-                x: String(data.x ?? ''),
-                y: String(data.y ?? ''),
-                title: data.title ? String(data.title) : undefined,
-              })
-              pushTrace(event, String(data.type ?? 'chart'))
+              updateTurn(turnId, (turn) => ({
+                ...turn,
+                chart: {
+                  type: String(data.type ?? 'table'),
+                  x: String(data.x ?? ''),
+                  y: String(data.y ?? ''),
+                  title: data.title ? String(data.title) : undefined,
+                  series: Array.isArray(data.series)
+                    ? data.series.map(String)
+                    : undefined,
+                },
+                open: { ...turn.open, chart: true },
+              }))
+              pushTrace(turnId, sseEvent, String(data.type ?? 'chart'))
               break
             case 'write_result':
-              setWriteResult({
-                affected_rows:
-                  typeof data.affected_rows === 'number'
-                    ? data.affected_rows
-                    : null,
-                sql: String(data.sql ?? ''),
-              })
+              updateTurn(turnId, (turn) => ({
+                ...turn,
+                writeResult: {
+                  affected_rows:
+                    typeof data.affected_rows === 'number'
+                      ? data.affected_rows
+                      : null,
+                  sql: String(data.sql ?? ''),
+                },
+              }))
               pushTrace(
-                event,
+                turnId,
+                sseEvent,
                 `写操作 · ${
                   typeof data.affected_rows === 'number'
                     ? data.affected_rows
@@ -223,51 +464,119 @@ export default function AppWorkbench() {
               break
             case 'route_decision':
               pushTrace(
-                event,
+                turnId,
+                sseEvent,
                 `${String(data.route_mode ?? '')} · ${String(data.route_source ?? '')}`,
               )
               break
+            case 'session_title': {
+              const title = String(data.title ?? '').slice(0, 10)
+              const sessionId = String(
+                data.session_id ??
+                  currentSessionIdRef.current ??
+                  '',
+              )
+              if (!title || !sessionId) break
+              updateSessions((previous) =>
+                previous.map((session) =>
+                  session.id === sessionId
+                    ? { ...session, title }
+                    : session,
+                ),
+              )
+              break
+            }
             case 'error': {
-              setError(String(data.message ?? '分析失败'))
-              const tid =
+              const traceId =
                 (data.trace_id ? String(data.trace_id) : null) ||
                 (data.request_id ? String(data.request_id) : null) ||
-                runTraceIdRef.current
-              setErrorTraceId(tid)
+                runTraceId
+              updateTurn(turnId, (turn) => ({
+                ...turn,
+                error: String(data.message ?? '分析失败'),
+                errorTraceId: traceId,
+              }))
               pushTrace(
-                event,
-                tid
-                  ? `${String(data.message ?? 'error')} · ${tid}`
+                turnId,
+                sseEvent,
+                traceId
+                  ? `${String(data.message ?? 'error')} · ${traceId}`
                   : String(data.message ?? 'error'),
               )
               break
             }
             case 'done':
-              if (typeof data.latency_ms === 'number') {
-                setLatencyMs(data.latency_ms)
-              }
-              if (data.need_clarification === true) {
-                setError(null)
-                setClarificationHint('需要补充信息后继续')
-              }
-              pushTrace(event, `完成 ${data.latency_ms ?? ''}ms`)
+              updateTurn(turnId, (turn) => ({
+                ...turn,
+                latencyMs:
+                  typeof data.latency_ms === 'number'
+                    ? data.latency_ms
+                    : turn.latencyMs,
+                error: data.need_clarification === true ? null : turn.error,
+                clarificationHint:
+                  data.need_clarification === true
+                    ? '需要补充信息后继续'
+                    : turn.clarificationHint,
+              }))
+              pushTrace(
+                turnId,
+                sseEvent,
+                `完成 ${data.latency_ms ?? ''}ms`,
+              )
               break
             default:
-              pushTrace(event, JSON.stringify(data).slice(0, 80))
+              pushTrace(
+                turnId,
+                sseEvent,
+                JSON.stringify(data).slice(0, 80),
+              )
           }
         },
       })
-    } catch (err) {
-      if ((err as Error).name === 'AbortError') return
-      setError(err instanceof Error ? err.message : '请求失败')
+      // Sync titles/turn_count from server (SSE session_title may be missed)
+      try {
+        const listed = await listSessions()
+        updateSessions(listed)
+      } catch {
+        const sid = currentSessionIdRef.current
+        updateSessions((previous) => {
+          const session = previous.find((item) => item.id === sid)
+          if (!session || !sid) return previous
+          const updated = {
+            ...session,
+            updated_at: new Date().toISOString(),
+            turn_count: session.turn_count + 1,
+          }
+          return [
+            updated,
+            ...previous.filter((item) => item.id !== sid),
+          ]
+        })
+      }
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') {
+        updateTurn(turnId, (turn) => ({
+          ...turn,
+          error: error instanceof Error ? error.message : '请求失败',
+        }))
+      }
     } finally {
-      setStreaming(false)
+      updateTurn(turnId, (turn) => ({ ...turn, streaming: false }))
+      if (activeRunRef.current === turnId) {
+        activeRunRef.current = null
+        abortRef.current = null
+        setStreaming(false)
+      }
     }
   }
 
+  const currentSession = sessions.find(
+    (session) => session.id === currentSessionId,
+  )
+  const currentTitle = currentSession?.title || '新会话'
+
   return (
-    <div className="flex min-h-screen bg-bg text-ink">
-      {/* Left sidebar */}
+    <div className="flex h-screen overflow-hidden bg-bg text-ink">
       <aside className="flex w-72 shrink-0 flex-col border-r border-line bg-surface">
         <div className="border-b border-line px-5 py-5">
           <p className="font-display text-xl leading-tight tracking-tight">
@@ -288,46 +597,69 @@ export default function AppWorkbench() {
           )}
 
           <section>
-            <h2 className="text-[11px] font-medium uppercase tracking-wider text-muted">
-              示例问题
-            </h2>
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-[11px] font-medium uppercase tracking-wider text-muted">
+                会话
+              </h2>
+              <button
+                type="button"
+                onClick={handleNewSession}
+                disabled={loading}
+                className="rounded-md bg-accent-soft px-2 py-1 text-xs font-medium text-accent transition-colors hover:bg-accent hover:text-white disabled:opacity-40"
+              >
+                + 新建
+              </button>
+            </div>
             <ul className="mt-2 space-y-1">
-              {examples.map((ex) => (
-                <li key={ex.id}>
-                  <button
-                    type="button"
-                    onClick={() => setQuestion(ex.question)}
-                    className="w-full rounded-md px-2 py-1.5 text-left text-xs leading-snug text-ink transition-colors hover:bg-accent-soft hover:text-accent"
-                  >
-                    {ex.question}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section className="mt-6">
-            <h2 className="text-[11px] font-medium uppercase tracking-wider text-muted">
-              数据表
-            </h2>
-            <ul className="mt-2 space-y-1">
-              {tables.map((t) => (
-                <li
-                  key={t.name}
-                  className="rounded-md px-2 py-1 font-mono text-xs text-muted"
-                  title={t.columns.map((c) => c.name).join(', ')}
-                >
-                  {t.name}
-                  <span className="ml-1 text-[10px] opacity-70">
-                    ({t.columns.length})
-                  </span>
-                </li>
-              ))}
+              {sessions.map((session) => {
+                const active = session.id === currentSessionId
+                return (
+                  <li key={session.id} className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchSession(session.id)}
+                      className={`min-w-0 flex-1 rounded-lg px-3 py-2 text-left transition-colors ${
+                        active
+                          ? 'bg-accent-soft text-accent'
+                          : 'text-ink hover:bg-bg'
+                      }`}
+                    >
+                      <span className="block truncate text-xs font-medium">
+                        {session.title || '新会话'}
+                      </span>
+                      <span className="mt-1 block text-[10px] text-muted">
+                        {formatSessionTime(session.updated_at)}
+                        {session.turn_count > 0
+                          ? ` · ${session.turn_count} 轮`
+                          : ''}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="删除会话"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void handleDeleteSession(session.id)
+                      }}
+                      className="shrink-0 rounded-md px-2 py-2 text-xs text-muted transition-colors hover:bg-accent-soft hover:text-accent"
+                    >
+                      删除
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           </section>
         </div>
 
-        <div className="border-t border-line p-4">
+        <div className="space-y-2 border-t border-line p-4">
+          <button
+            type="button"
+            onClick={() => navigate('/app/tables')}
+            className="w-full rounded-lg bg-accent-soft px-3 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent hover:text-white"
+          >
+            查看全部数据表
+          </button>
           <button
             type="button"
             onClick={handleLogout}
@@ -338,160 +670,218 @@ export default function AppWorkbench() {
         </div>
       </aside>
 
-      {/* Main panel */}
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="border-b border-line bg-surface px-6 py-4">
-          <h1 className="font-display text-lg">分析工作台</h1>
+          <h1 className="truncate font-display text-lg">{currentTitle}</h1>
           <p className="text-xs text-muted">
-            自然语言提问 · SQL 经 Guardrail 后执行
+            多轮经营分析 · SQL 经 Guardrail 后执行
           </p>
         </header>
 
-        <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
-          <form onSubmit={handleSubmit} className="flex gap-3">
+        <div className="flex min-h-0 flex-1 overflow-y-auto">
+          <div
+            className={`mx-auto w-full px-6 ${
+              !loading && turns.length === 0
+                ? 'max-w-6xl py-4'
+                : 'max-w-5xl space-y-7 py-6'
+            }`}
+          >
+            {loading && turns.length === 0 ? (
+              <p className="py-16 text-center text-sm text-muted">
+                正在加载会话…
+              </p>
+            ) : !loading && turns.length === 0 ? (
+              <div className="flex flex-col py-1">
+                <div className="shrink-0 text-center">
+                  <p className="font-display text-xl tracking-tight">
+                    从一个经营问题开始
+                  </p>
+                  <p className="mt-1.5 text-sm text-muted">
+                    可从下方示例选择，或在底部直接输入问题。
+                  </p>
+                </div>
+                <ul className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {examples.map((example, index) => (
+                    <li
+                      key={example.id}
+                      className="min-w-0 animate-rise"
+                      style={{
+                        animationDelay: `${Math.min(index, 12) * 28}ms`,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setQuestion(example.question)}
+                        className="group flex h-full w-full items-start rounded-xl border border-line bg-surface px-3 py-2.5 text-left text-[13px] leading-snug text-ink shadow-[0_1px_0_rgba(18,20,26,0.04)] transition-[transform,border-color,background-color,box-shadow,color] duration-200 hover:-translate-y-0.5 hover:border-accent/35 hover:bg-accent-soft hover:text-accent hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                      >
+                        <span className="line-clamp-2">{example.question}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              turns.map((turn) => (
+                <TurnCard
+                  key={turn.id}
+                  turn={turn}
+                  onToggle={(section) =>
+                    toggleTurnSection(turn.id, section)
+                  }
+                />
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="border-t border-line bg-surface px-6 py-4">
+          <form
+            onSubmit={handleSubmit}
+            className="mx-auto flex max-w-5xl items-end gap-3"
+          >
             <textarea
               value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              rows={3}
-              placeholder="输入分析问题，或从左侧选择示例…"
-              className="min-h-[5rem] flex-1 resize-y rounded-xl border border-line bg-surface px-4 py-3 text-sm outline-none ring-accent/30 focus:ring-2"
-              disabled={streaming}
+              onChange={(event) => setQuestion(event.target.value)}
+              rows={2}
+              placeholder="继续追问，或输入新的分析问题…"
+              className="min-h-[3.5rem] flex-1 resize-y rounded-xl border border-line bg-bg px-4 py-3 text-sm outline-none ring-accent/30 focus:ring-2"
+              disabled={loading || streaming || !currentSessionId}
             />
             <button
               type="submit"
-              disabled={streaming || !question.trim()}
-              className="self-end rounded-xl bg-accent px-5 py-3 text-sm font-medium text-white transition-opacity disabled:opacity-40"
+              disabled={
+                loading ||
+                streaming ||
+                !question.trim() ||
+                !currentSessionId
+              }
+              className="rounded-xl bg-accent px-5 py-3 text-sm font-medium text-white transition-opacity disabled:opacity-40"
             >
-              {streaming ? '分析中…' : '发送'}
+              {streaming ? '分析中…' : '分析'}
             </button>
           </form>
-
-          {error && (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-              <p>{error}</p>
-              {errorTraceId && (
-                <p className="mt-1 font-mono text-xs text-red-700/80">
-                  trace_id: {errorTraceId}
-                </p>
-              )}
-            </div>
-          )}
-
-          {answer && (
-            <section className="rounded-xl border border-line bg-surface p-4">
-              <h2 className="text-xs font-medium uppercase tracking-wider text-muted">
-                回答
-              </h2>
-              {clarificationHint && (
-                <p className="mt-2 text-xs text-muted">{clarificationHint}</p>
-              )}
-              <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">
-                {answer}
-              </p>
-            </section>
-          )}
-
-          {sql && (
-            <section className="rounded-xl border border-line bg-surface p-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-xs font-medium uppercase tracking-wider text-muted">
-                  SQL
-                </h2>
-                {guardrailPassed && (
-                  <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] text-accent">
-                    已通过安全校验
-                  </span>
-                )}
-                {sqlRepaired && (
-                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800">
-                    已根据执行错误自动修复
-                  </span>
-                )}
-              </div>
-              <pre className="mt-2 overflow-x-auto rounded-lg bg-bg p-3 font-mono text-xs leading-relaxed text-ink">
-                {sql}
-              </pre>
-            </section>
-          )}
-
-          {writeResult && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              写操作已成功执行
-              {writeResult.affected_rows != null
-                ? ` · 影响 ${writeResult.affected_rows} 行`
-                : ''}
-            </div>
-          )}
-
-          {columns.length > 0 && (
-            <section className="rounded-xl border border-line bg-surface p-4">
-              <h2 className="text-xs font-medium uppercase tracking-wider text-muted">
-                查询结果 · {rows.length} 行
-              </h2>
-              <div className="mt-3 max-h-80 overflow-auto">
-                <table className="min-w-full border-collapse text-left text-xs">
-                  <thead>
-                    <tr className="border-b border-line text-muted">
-                      {columns.map((c) => (
-                        <th key={c} className="sticky top-0 bg-surface px-3 py-2 font-medium">
-                          {c}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row, i) => (
-                      <tr key={i} className="border-b border-line/60">
-                        {columns.map((c) => (
-                          <td key={c} className="px-3 py-2 font-mono whitespace-nowrap">
-                            {formatCell(row[c])}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          )}
-
-          <ResultChart chart={chart} rows={rows} />
-
-          <section className="rounded-xl border border-line bg-surface">
-            <button
-              type="button"
-              onClick={() => setTraceOpen((v) => !v)}
-              className="flex w-full items-center justify-between px-4 py-3 text-left text-sm"
-            >
-              <span className="text-xs font-medium uppercase tracking-wider text-muted">
-                Agent Trace
-                {latencyMs != null ? ` · ${latencyMs}ms` : ''}
-                {trace.length ? ` · ${trace.length}` : ''}
-              </span>
-              <span className="text-muted">{traceOpen ? '收起' : '展开'}</span>
-            </button>
-            {traceOpen && (
-              <ol className="space-y-1 border-t border-line px-4 py-3 font-mono text-[11px] text-muted">
-                {trace.length === 0 && (
-                  <li className="text-muted">提交问题后显示节点事件</li>
-                )}
-                {trace.map((t) => (
-                  <li key={t.id} className="flex gap-2">
-                    <span className="shrink-0 text-accent">{t.event}</span>
-                    <span>{t.summary}</span>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </section>
         </div>
       </main>
     </div>
   )
 }
 
-function formatCell(value: unknown): string {
-  if (value == null) return ''
-  if (typeof value === 'object') return JSON.stringify(value)
-  return String(value)
+async function loadInitialData(): Promise<InitialData> {
+  const listedSessions = await listSessions()
+  const session =
+    listedSessions.length > 0 ? listedSessions[0] : await createSession()
+  const sessions =
+    listedSessions.length > 0 ? listedSessions : [session]
+  const history = await listSessionTurns(session.id)
+
+  return {
+    sessions,
+    currentSessionId: session.id,
+    turns: mapHistoryTurns(session.id, history),
+  }
+}
+
+async function loadExamples(): Promise<ExampleItem[]> {
+  const response = await apiFetch('/api/examples')
+  if (!response.ok) throw new Error('加载示例失败')
+  const data = await response.json()
+  return data.examples ?? []
+}
+
+function mapHistoryTurns(
+  sessionId: string,
+  history: SessionTurn[],
+): TurnView[] {
+  return history.map((turn) => {
+    const display = turn.display ?? null
+    const columns = Array.isArray(display?.columns) ? display.columns : []
+    const rows = Array.isArray(display?.rows) ? display.rows : []
+    const chart =
+      display?.chart &&
+      typeof display.chart === 'object' &&
+      display.chart.type &&
+      display.chart.type !== 'table'
+        ? {
+            type: String(display.chart.type),
+            x: String(display.chart.x ?? ''),
+            y: String(display.chart.y ?? ''),
+            title: display.chart.title
+              ? String(display.chart.title)
+              : undefined,
+            series: Array.isArray(display.chart.series)
+              ? display.chart.series.map(String)
+              : undefined,
+          }
+        : null
+    const trace = Array.isArray(display?.trace)
+      ? display.trace.map((entry, index) => ({
+          id: index + 1,
+          event: String(entry.event ?? ''),
+          summary: String(entry.summary ?? ''),
+        }))
+      : []
+    const hasRows = columns.length > 0 && rows.length > 0
+    const hasChart = chart != null && Boolean(chart.x) && Boolean(chart.y)
+    return {
+      id: `${sessionId}-history-${turn.turn_index}`,
+      question: turn.question,
+      answer: turn.result_summary ?? '',
+      sql: turn.sql_text ?? '',
+      sqlRepaired: Boolean(display?.sql_repaired),
+      guardrailPassed: Boolean(
+        display?.guardrail_passed || (turn.sql_text && hasRows),
+      ),
+      columns,
+      rows,
+      chart,
+      writeResult: null,
+      trace,
+      error: null,
+      errorTraceId: null,
+      clarificationHint: null,
+      latencyMs: null,
+      streaming: false,
+      fromHistory: true,
+      open: {
+        sql: Boolean(turn.sql_text),
+        rows: hasRows,
+        chart: hasChart,
+        trace: false,
+      },
+    }
+  })
+}
+
+function createEmptyTurn(id: string, question: string): TurnView {
+  return {
+    id,
+    question,
+    answer: '',
+    sql: '',
+    sqlRepaired: false,
+    guardrailPassed: false,
+    columns: [],
+    rows: [],
+    chart: null,
+    writeResult: null,
+    trace: [],
+    error: null,
+    errorTraceId: null,
+    clarificationHint: null,
+    latencyMs: null,
+    streaming: true,
+    fromHistory: false,
+    open: { sql: true, rows: true, chart: true, trace: false },
+  }
+}
+
+function formatSessionTime(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
 }

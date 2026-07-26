@@ -1,9 +1,51 @@
 import json
+from datetime import datetime
 
 import pytest
 
 from app.agent.memory import store
+from app.agent.memory.store import (
+    MemoryError,
+    create_session,
+    delete_session,
+    get_session_title,
+    list_sessions,
+    list_turns,
+    save_turn,
+    set_session_title_if_empty,
+)
+from app.auth.passwords import hash_password
+from app.db.database import get_connection
 from app.db.init_db import init_database
+
+
+@pytest.fixture
+def memory_user_id(tmp_db_path):
+    init_database(reset=True)
+    return "1"
+
+
+@pytest.fixture
+def other_user_id(memory_user_id):
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO app_users (id, username, password_hash, role, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                2,
+                "other_analyst",
+                hash_password("other1234"),
+                "analyst",
+                datetime.now().isoformat(sep=" ", timespec="seconds"),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return "2"
 
 
 def test_ensure_session_and_isolation(tmp_db_path):
@@ -163,6 +205,7 @@ def test_memory_save_only_saves_turn_for_non_success_paths(
     monkeypatch.setattr(
         store, "save_turn", lambda **kwargs: calls.append(("turn", kwargs))
     )
+    monkeypatch.setattr(store, "get_session_title", lambda *args: "已有标题")
     monkeypatch.setattr(
         store,
         "update_preferences_from_slots",
@@ -196,6 +239,7 @@ def test_memory_save_updates_long_term_memory_on_success(monkeypatch):
     monkeypatch.setattr(
         store, "save_turn", lambda **kwargs: calls.append(("turn", kwargs))
     )
+    monkeypatch.setattr(store, "get_session_title", lambda *args: "已有标题")
     monkeypatch.setattr(
         store,
         "update_preferences_from_slots",
@@ -236,6 +280,7 @@ def test_memory_save_ignores_session_ownership_error(monkeypatch):
         raise store.MemoryError("Session belongs to another user")
 
     monkeypatch.setattr(store, "save_turn", reject_turn)
+    monkeypatch.setattr(store, "get_session_title", lambda *args: "已有标题")
     monkeypatch.setattr(
         store,
         "update_preferences_from_slots",
@@ -296,6 +341,103 @@ def test_save_turn_filters_json_redaction_and_round_trip(tmp_db_path):
             ("s1",),
         ).fetchone()
     assert json.loads(row["filters_json"]) == loaded
+
+
+def test_create_and_list_sessions_ordered(memory_user_id):
+    older = create_session(memory_user_id)
+    newer = create_session(memory_user_id)
+    sessions = list_sessions(memory_user_id)
+    assert [s["id"] for s in sessions[:2]] == [newer["id"], older["id"]]
+    assert sessions[0]["turn_count"] == 0
+    assert sessions[0]["title"] is None
+
+
+def test_list_turns_requires_owner(memory_user_id, other_user_id):
+    sess = create_session(memory_user_id)
+    save_turn(
+        session_id=sess["id"],
+        user_id=memory_user_id,
+        question="q1",
+        intent="sales_overview",
+        sql_text="SELECT 1",
+        slots={"metrics": ["gmv"], "filters": {}, "group_by": [], "time_range": None},
+        result_summary="ok",
+    )
+    turns = list_turns(sess["id"], memory_user_id)
+    assert len(turns) == 1
+    assert turns[0]["question"] == "q1"
+    assert turns[0]["sql_text"] == "SELECT 1"
+    try:
+        list_turns(sess["id"], other_user_id)
+        assert False, "expected MemoryError"
+    except MemoryError:
+        pass
+
+
+def test_save_turn_refreshes_session_updated_at(memory_user_id):
+    sess = create_session(memory_user_id)
+    before = sess["updated_at"]
+    save_turn(
+        session_id=sess["id"],
+        user_id=memory_user_id,
+        question="q",
+        intent="sales_overview",
+        sql_text=None,
+        slots={"metrics": ["gmv"], "filters": {}, "group_by": [], "time_range": None},
+        result_summary="ok",
+    )
+    after = next(s["updated_at"] for s in list_sessions(memory_user_id) if s["id"] == sess["id"])
+    assert after >= before
+    assert after != before
+
+
+def test_set_session_title_if_empty(memory_user_id):
+    sess = create_session(memory_user_id)
+    long_title = "最近三十天各渠道 GMV 趋势如何变化以及同比环比情况请详细分析并给出 actionable 建议"
+    assert len(long_title) > 10
+    written = set_session_title_if_empty(sess["id"], memory_user_id, long_title)
+    assert written is True
+    listed = list_sessions(memory_user_id)
+    title = next(s["title"] for s in listed if s["id"] == sess["id"])
+    assert title is not None
+    assert len(title) == 10
+    written2 = set_session_title_if_empty(sess["id"], memory_user_id, "第二次不应覆盖")
+    assert written2 is False
+    listed2 = list_sessions(memory_user_id)
+    assert next(s["title"] for s in listed2 if s["id"] == sess["id"]) == title
+
+
+def test_set_session_title_if_empty_blank_title_returns_false(memory_user_id):
+    sess = create_session(memory_user_id)
+    assert set_session_title_if_empty(sess["id"], memory_user_id, "   ") is False
+    assert get_session_title(sess["id"], memory_user_id) is None
+
+
+def test_get_session_title_none_then_value(memory_user_id):
+    sess = create_session(memory_user_id)
+    assert get_session_title(sess["id"], memory_user_id) is None
+    set_session_title_if_empty(sess["id"], memory_user_id, "渠道GMV")
+    assert get_session_title(sess["id"], memory_user_id) == "渠道GMV"
+
+
+def test_delete_session_removes_turns(memory_user_id, other_user_id):
+    sess = create_session(memory_user_id)
+    save_turn(
+        session_id=sess["id"],
+        user_id=memory_user_id,
+        question="q",
+        intent="x",
+        sql_text=None,
+        slots={"metrics": [], "filters": {}, "group_by": [], "time_range": None},
+        result_summary="ok",
+    )
+    delete_session(sess["id"], memory_user_id)
+    assert all(s["id"] != sess["id"] for s in list_sessions(memory_user_id))
+    with pytest.raises(MemoryError):
+        list_turns(sess["id"], memory_user_id)
+    other = create_session(memory_user_id)
+    with pytest.raises(MemoryError):
+        delete_session(other["id"], other_user_id)
 
 
 def test_strip_sensitive():

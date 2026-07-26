@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime
 
 from app.agent.memory.summarize import merge_preferences, strip_sensitive
+from app.agent.memory.turn_display import hydrate_display_from_sql
 from app.db.database import get_connection
 
 MAX_TURNS_PER_SESSION = 10
@@ -15,7 +17,7 @@ class MemoryError(RuntimeError):
 
 
 def _now() -> str:
-    return datetime.now().isoformat(sep=" ", timespec="seconds")
+    return datetime.now().isoformat(sep=" ", timespec="microseconds")
 
 
 def _user_id(user_id: str) -> int:
@@ -56,6 +58,200 @@ def ensure_session(session_id: str, user_id: str) -> None:
             conn.commit()
         elif row["user_id"] != owner_id:
             raise MemoryError("Session belongs to another user")
+    finally:
+        conn.close()
+
+
+def create_session(user_id: str, session_id: str | None = None) -> dict:
+    sid = str(session_id or f"sess_{uuid.uuid4().hex}")
+    ensure_session(sid, user_id)
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
+            (_now(), sid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return next(s for s in list_sessions(user_id) if s["id"] == sid)
+
+
+def list_sessions(user_id: str) -> list[dict]:
+    owner_id = _user_id(user_id)
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT s.id, s.title, s.updated_at,
+                   (SELECT COUNT(*) FROM session_turns t WHERE t.session_id = s.id) AS turn_count
+            FROM chat_sessions s
+            WHERE s.user_id = ?
+            ORDER BY s.updated_at DESC, s.id DESC
+            """,
+            (owner_id,),
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "title": row["title"],
+                "updated_at": row["updated_at"],
+                "turn_count": int(row["turn_count"]),
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
+def assert_session_owner(session_id: str, user_id: str) -> None:
+    owner_id = _user_id(user_id)
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT user_id FROM chat_sessions WHERE id = ?",
+            (str(session_id),),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise MemoryError("Session not found")
+    if row["user_id"] != owner_id:
+        raise MemoryError("Session belongs to another user")
+
+
+def list_turns(
+    session_id: str,
+    user_id: str,
+    *,
+    user_role: str | None = None,
+    hydrate: bool = True,
+) -> list[dict]:
+    assert_session_owner(session_id, user_id)
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, turn_index, question, intent, sql_text, metrics_json,
+                   time_range_json, filters_json, group_by_json,
+                   result_summary, display_json, created_at
+            FROM session_turns
+            WHERE session_id = ?
+            ORDER BY turn_index DESC
+            LIMIT ?
+            """,
+            (str(session_id), MAX_TURNS_PER_SESSION),
+        ).fetchall()
+        ordered = list(reversed(rows))
+        out: list[dict] = []
+        for row in ordered:
+            display = json.loads(row["display_json"]) if row["display_json"] else None
+            if (
+                hydrate
+                and user_role
+                and not _display_has_rows(display)
+                and row["sql_text"]
+            ):
+                hydrated = hydrate_display_from_sql(
+                    sql_text=row["sql_text"],
+                    question=row["question"] or "",
+                    user_role=user_role,
+                )
+                if hydrated:
+                    display = hydrated
+                    conn.execute(
+                        "UPDATE session_turns SET display_json = ? WHERE id = ?",
+                        (_json(display), row["id"]),
+                    )
+            out.append(
+                {
+                    "turn_index": row["turn_index"],
+                    "question": row["question"],
+                    "intent": row["intent"],
+                    "sql_text": row["sql_text"],
+                    "metrics": json.loads(row["metrics_json"] or "[]"),
+                    "time_range": json.loads(row["time_range_json"] or "null"),
+                    "filters": json.loads(row["filters_json"] or "{}"),
+                    "group_by": json.loads(row["group_by_json"] or "[]"),
+                    "result_summary": row["result_summary"],
+                    "display": display,
+                    "created_at": row["created_at"],
+                }
+            )
+        conn.commit()
+        return out
+    finally:
+        conn.close()
+
+
+def _display_has_rows(display: dict | None) -> bool:
+    if not isinstance(display, dict):
+        return False
+    rows = display.get("rows")
+    return isinstance(rows, list) and len(rows) > 0
+
+
+def set_session_title_if_empty(session_id: str, user_id: str, title: str) -> bool:
+    assert_session_owner(session_id, user_id)
+    clipped = strip_sensitive(title).strip()[:10]
+    conn = get_connection()
+    try:
+        now = _now()
+        sid = str(session_id)
+        if not clipped:
+            conn.execute(
+                "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
+                (now, sid),
+            )
+            conn.commit()
+            return False
+        cur = conn.execute(
+            "UPDATE chat_sessions SET title = ?, updated_at = ? "
+            "WHERE id = ? AND (title IS NULL OR TRIM(title) = '')",
+            (clipped, now, sid),
+        )
+        if cur.rowcount > 0:
+            conn.commit()
+            return True
+        conn.execute(
+            "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
+            (now, sid),
+        )
+        conn.commit()
+        return False
+    finally:
+        conn.close()
+
+
+def get_session_title(session_id: str, user_id: str) -> str | None:
+    assert_session_owner(session_id, user_id)
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT title FROM chat_sessions WHERE id = ?",
+            (str(session_id),),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    title = (row["title"] or "").strip()
+    return title or None
+
+
+def delete_session(session_id: str, user_id: str) -> None:
+    assert_session_owner(session_id, user_id)
+    conn = get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM session_turns WHERE session_id = ?",
+            (str(session_id),),
+        )
+        conn.execute(
+            "DELETE FROM chat_sessions WHERE id = ?",
+            (str(session_id),),
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -145,6 +341,7 @@ def save_turn(
     sql_text: str | None,
     slots: dict,
     result_summary: str,
+    display: dict | None = None,
 ) -> None:
     ensure_session(session_id, user_id)
     conn = get_connection()
@@ -162,8 +359,8 @@ def save_turn(
             INSERT INTO session_turns (
                 session_id, turn_index, question, intent, sql_text,
                 metrics_json, time_range_json, filters_json, group_by_json,
-                result_summary, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                result_summary, display_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(session_id),
@@ -176,6 +373,7 @@ def save_turn(
                 _json(slots.get("filters") or {}),
                 _json(slots.get("group_by") or []),
                 strip_sensitive(result_summary),
+                _json(display) if display is not None else None,
                 _now(),
             ),
         )
@@ -198,6 +396,44 @@ def save_turn(
                 """,
                 (str(session_id), excess),
             )
+        conn.execute(
+            "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
+            (_now(), str(session_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def patch_latest_turn_display(
+    session_id: str,
+    user_id: str,
+    patch: dict,
+) -> None:
+    """Merge fields into the newest turn's display_json for this session."""
+    assert_session_owner(session_id, user_id)
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT id, display_json
+            FROM session_turns
+            WHERE session_id = ?
+            ORDER BY turn_index DESC
+            LIMIT 1
+            """,
+            (str(session_id),),
+        ).fetchone()
+        if row is None:
+            return
+        current = json.loads(row["display_json"]) if row["display_json"] else {}
+        if not isinstance(current, dict):
+            current = {}
+        current.update(patch)
+        conn.execute(
+            "UPDATE session_turns SET display_json = ? WHERE id = ?",
+            (_json(current), row["id"]),
+        )
         conn.commit()
     finally:
         conn.close()

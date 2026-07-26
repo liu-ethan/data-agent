@@ -25,6 +25,34 @@ const TICKER_ITEMS = [
   },
 ]
 
+const AI_HIGHLIGHTS = [
+  { title: 'NL → 安全 SQL', detail: '权限校验 + 沙箱执行' },
+  { title: '双路径编排', detail: 'ReAct / Coordinator' },
+  { title: 'SSE Trace', detail: '节点过程可观测' },
+  { title: '多轮记忆', detail: 'Session 槽位追问' },
+]
+
+const CAPABILITY_STORY = [
+  {
+    step: '01',
+    title: '理解',
+    summary: '意图 + 槽位 / 澄清',
+    detail: '识别经营问题与关键条件；信息不足时先追问，不急于生成 SQL。',
+  },
+  {
+    step: '02',
+    title: '执行',
+    summary: 'Schema Linking → 权限 → 沙箱 → 可修复',
+    detail: '把业务语言连接到数据结构，在权限边界内验证、执行并修复查询。',
+  },
+  {
+    step: '03',
+    title: '交付',
+    summary: '结论 · 表 · 图 · Trace；多轮追问',
+    detail: '同时交付可读结论与可核验过程，让下一轮问题沿着上下文继续。',
+  },
+]
+
 function QueryTicker() {
   const [index, setIndex] = useState(0)
 
@@ -45,7 +73,7 @@ function QueryTicker() {
           <span className="animate-caret text-accent">▍</span>
         </p>
         <p className="truncate text-muted">{item.sql}</p>
-        <p className="text-accent">✓ 已生成结果与图表 · {item.ms}ms</p>
+        <p className="text-accent">✓ Guardrail 通过 · 已生成结果与图表 · {item.ms}ms</p>
       </div>
     </div>
   )
@@ -100,7 +128,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-bg">
+    <div className="relative overflow-x-hidden bg-bg">
       {/* Ambient atmosphere: soft accent glow + coordinate-grid texture, kept quiet */}
       <div
         aria-hidden
@@ -141,7 +169,26 @@ export default function LoginPage() {
               秒级返回结论、明细表与自动图表。
             </p>
 
-            <div className="mt-8 max-w-md" style={{ animationDelay: '200ms' }}>
+            <dl
+              className="animate-rise mt-7 grid max-w-xl grid-cols-2 border-y border-line"
+              style={{ animationDelay: '180ms' }}
+            >
+              {AI_HIGHLIGHTS.map((item, index) => (
+                <div
+                  key={item.title}
+                  className={`py-3.5 ${
+                    index % 2 === 0 ? 'pr-4' : 'border-l border-line pl-4'
+                  } ${index < 2 ? 'border-b border-line' : ''}`}
+                >
+                  <dt className="text-sm font-semibold text-ink">{item.title}</dt>
+                  <dd className="mt-1 font-mono text-[11px] leading-5 text-muted">
+                    {item.detail}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+
+            <div className="mt-6 max-w-md" style={{ animationDelay: '240ms' }}>
               <QueryTicker />
             </div>
           </section>
@@ -273,6 +320,46 @@ export default function LoginPage() {
           </section>
         </main>
       </div>
+
+      <section
+        aria-labelledby="capability-story-title"
+        className="relative border-t border-line bg-surface"
+      >
+        <div className="mx-auto max-w-6xl px-6 py-20 lg:px-10 lg:py-24">
+          <div className="max-w-2xl">
+            <p className="font-mono text-xs font-medium uppercase tracking-[0.2em] text-accent">
+              From question to evidence
+            </p>
+            <h2
+              id="capability-story-title"
+              className="mt-4 font-display text-3xl font-medium tracking-tight text-ink sm:text-4xl"
+            >
+              不只给答案，也交付可信的分析过程
+            </h2>
+            <p className="mt-4 leading-relaxed text-muted">
+              从理解业务问题，到安全执行，再到可核验交付，每一步都保留上下文与边界。
+            </p>
+          </div>
+
+          <ol className="mt-14 grid border-y border-line md:grid-cols-3">
+            {CAPABILITY_STORY.map((item, index) => (
+              <li
+                key={item.title}
+                className={`py-8 md:min-h-64 md:py-9 ${
+                  index > 0 ? 'border-t border-line md:border-l md:border-t-0 md:pl-8' : ''
+                } ${index < CAPABILITY_STORY.length - 1 ? 'md:pr-8' : ''}`}
+              >
+                <div className="flex items-baseline justify-between gap-4">
+                  <h3 className="font-display text-2xl font-medium text-ink">{item.title}</h3>
+                  <span className="font-mono text-xs text-accent">{item.step}</span>
+                </div>
+                <p className="mt-8 font-mono text-xs leading-6 text-accent">{item.summary}</p>
+                <p className="mt-4 text-sm leading-7 text-muted">{item.detail}</p>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
     </div>
   )
 }

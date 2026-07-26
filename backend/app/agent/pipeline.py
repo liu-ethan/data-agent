@@ -62,15 +62,28 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
 
     graph = build_graph()
     merged: dict = dict(state)
+    display_trace: list[dict] = []
     try:
         for update in graph.stream(merged, stream_mode="updates"):
             for node, delta in update.items():
                 log_event("INFO", "node_start", node=node, **run_ids)
                 yield ("node_start", {"node": node})
+                display_trace.append(
+                    {"event": "node_start", "summary": f"开始 {node}"}
+                )
                 if isinstance(delta, dict):
                     merged.update(delta)
                     for item in delta.get("tool_events") or []:
-                        yield (item["event"], item.get("data") or {})
+                        event_name = item["event"]
+                        data = item.get("data") or {}
+                        yield (event_name, data)
+                        tool = data.get("tool") or data.get("status") or ""
+                        display_trace.append(
+                            {
+                                "event": event_name,
+                                "summary": str(tool)[:120],
+                            }
+                        )
                 summary = _summarize(node, merged)
                 log_event(
                     "INFO",
@@ -82,6 +95,9 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
                 yield (
                     "node_end",
                     {"node": node, "summary": summary},
+                )
+                display_trace.append(
+                    {"event": "node_end", "summary": f"{node}: {summary}"}
                 )
                 if node == "ComplexityRouter":
                     log_event(
@@ -154,6 +170,35 @@ def iter_pipeline_events(state: AgentState) -> Iterator[tuple[str, dict]]:
                     and merged.get("answer")
                 ):
                     yield ("answer", {"text": merged["answer"]})
+                    display_trace.append(
+                        {"event": "answer", "summary": "结论已生成"}
+                    )
+                if node == "MemorySave":
+                    try:
+                        from app.agent.memory.store import patch_latest_turn_display
+
+                        patch_latest_turn_display(
+                            str(merged.get("session_id") or ""),
+                            str(merged.get("user_id") or ""),
+                            {"trace": display_trace[-80:]},
+                        )
+                    except Exception:
+                        pass
+                    title = merged.get("session_title")
+                    if title:
+                        payload = {
+                            "session_id": str(
+                                merged.get("session_id") or ""
+                            ),
+                            "title": str(title)[:10],
+                        }
+                        log_event(
+                            "INFO",
+                            "session_title",
+                            title=payload["title"],
+                            **run_ids,
+                        )
+                        yield ("session_title", payload)
     except Exception as exc:
         log_event(
             "ERROR",
