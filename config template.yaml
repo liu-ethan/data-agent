@@ -1,0 +1,233 @@
+# Data Runtime Agent local configuration template.
+# Fill local values here first; production should prefer environment variables
+# or a secret manager for passwords and API keys.
+
+app:
+  name: data-runtime-agent
+  environment: local
+  timezone: Asia/Shanghai
+  api_base_url: http://localhost:8000
+  frontend_base_url: http://localhost:5173
+  cors_origins:
+    - http://localhost:5173
+  request_timeout_seconds: 35
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  reload: true
+  workers: 1
+
+auth:
+  jwt:
+    issuer: data-runtime-agent
+    audience: data-runtime-agent-users
+    algorithm: HS256
+    secret: CHANGE_ME_JWT_SECRET
+    access_token_expire_minutes: 120
+  demo_users:
+    enabled: true
+    default_user_id: u_demo_user
+    default_admin_id: u_demo_admin
+
+mysql:
+  host: localhost
+  port: 3306
+  database: data_agent
+  charset: utf8mb4
+  pool_size: 10
+  max_overflow: 20
+  pool_recycle_seconds: 1800
+  accounts:
+    migration:
+      username: agent_migration
+      password: "CHANGE_ME_MYSQL_PASSWORD"
+    reader:
+      username: agent_reader
+      password: "CHANGE_ME_MYSQL_PASSWORD"
+    writer:
+      username: agent_writer
+      password: "CHANGE_ME_MYSQL_PASSWORD"
+
+milvus:
+  enabled: false
+  uri: http://localhost:19530
+  token: ""
+  database: default
+  collections:
+    source_domain: catalog_source_domain
+    object: catalog_object
+    field_entity: catalog_field_entity
+    relation: catalog_relation
+
+  temperature:
+    agent: 0.1
+    query_generation: 0.0
+    response: 0.2
+    summarizer: 0.0
+  max_output_tokens:
+    agent: 1200
+    query_generation: 1600
+    response: 1200
+    summarizer: 800
+
+runtime_agent:
+  max_iterations: 6
+  max_retrieval_rounds: 2
+  max_read_queries: 3
+  max_query_retries: 1
+  max_analysis_calls: 1
+  max_artifacts: 3
+  max_rows_per_query: 1000
+  max_total_seconds: 30
+  stop_on_repeated_action: true
+
+retrieval_budget:
+  max_source_candidates: 3
+  max_object_candidates: 5
+  max_fields_per_object: 8
+  max_join_hops: 2
+  max_context_tokens: 3000
+  max_retrieval_rounds: 2
+  min_rerank_score: 0.55
+  ambiguity_score_gap: 0.08
+
+# LLM 配置（兼容 OpenAI 接口协议，支持任意 OpenAI-compatible 服务）
+llm:
+  base_url: https://your-llm-provider/v1
+  api_key: CHANGE_ME_LLM_API_KEY
+  model: your-model-name
+
+
+read_query:
+  max_rows: 1000
+  max_execution_ms: 5000
+  max_tables: 5
+  max_joins: 4
+  require_time_filter_for_fact_table: true
+  allow_select_star: false
+  explain:
+    enabled: true
+    max_estimated_rows: 100000
+    max_cost: 100000
+  allowed_statement_types:
+    - SELECT
+    - WITH
+  blocked_schemas:
+    - information_schema
+    - mysql
+    - performance_schema
+    - sys
+
+write_gateway:
+  enabled: false
+  allowed_roles:
+    - ADMIN
+  allowed_operations:
+    - INSERT
+    - UPDATE
+  forbidden_operations:
+    - DELETE
+    - CREATE
+    - ALTER
+    - DROP
+    - TRUNCATE
+    - RENAME
+    - GRANT
+    - REVOKE
+  max_affected_rows: 1
+  approval_expire_minutes: 15
+  allowed_tables:
+    products:
+      insert: false
+      update_fields:
+        - product_name
+      required_unique_filters:
+        - product_id
+
+permissions:
+  default_policy_version: policy_local_v1
+  denied_classifications:
+    - PHONE
+    - ID_CARD
+    - PASSWORD
+    - TOKEN
+  row_scope_fields:
+    shop_id: shop_id
+  demo_scopes:
+    u_demo_user:
+      role: USER
+      allowed_domains:
+        - ECOMMERCE_TRADE
+      allowed_source_ids:
+        - mysql_ecommerce_local
+      shop_ids:
+        - shop_001
+        - shop_002
+    u_demo_admin:
+      role: ADMIN
+      allowed_domains:
+        - ECOMMERCE_TRADE
+      allowed_source_ids:
+        - mysql_ecommerce_local
+      shop_ids:
+        - shop_001
+        - shop_002
+        - shop_003
+
+memory:
+  checkpointer:
+    backend: mysql
+    checkpoint_namespace: default
+    optimistic_locking: true
+  short_term:
+    recent_message_limit: 8
+    summary_after_messages: 12
+    artifact_ttl_days: 30
+  long_term:
+    enabled: true
+    allowed_keys:
+      - timezone
+      - default_shop_id
+      - chart_preference
+      - number_format
+    require_user_confirmation: true
+
+artifacts:
+  max_table_rows_preview: 100
+  csv_max_rows: 10000
+  chart:
+    enabled: true
+    allowed_types:
+      - line
+      - bar
+      - horizontal_bar
+      - metric_card
+
+observability:
+  trace_enabled: true
+  provider: local
+  langfuse:
+    enabled: false
+    public_key: CHANGE_ME_LANGFUSE_PUBLIC_KEY
+    secret_key: CHANGE_ME_LANGFUSE_SECRET_KEY
+    host: http://localhost:3000
+  log_level: INFO
+  redact_fields:
+    - password
+    - token
+    - secret
+    - jwt
+    - phone
+    - id_card
+
+evaluation:
+  enabled: true
+  cases_dir: tests/eval_cases
+  golden_results_dir: tests/golden_results
+  reports_dir: reports
+  fixed_time_anchor: "2026-08-16T10:00:00+08:00"
+  max_case_seconds: 30
+  output_formats:
+    - json
+    - csv
