@@ -1,6 +1,6 @@
 # Spec 02：可信只读执行网关
 
-状态：`Ready`
+状态：`Implemented`
 
 对应里程碑：M2
 

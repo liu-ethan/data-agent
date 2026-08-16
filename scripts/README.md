@@ -11,35 +11,11 @@ chmod +x scripts/mysql_env.sh
 scripts/mysql_env.sh init
 ```
 
-脚本内置了本地开发默认密码：
-
-- root 密码：当前配置为 `lxh152732`，对应现有本机 MySQL root 密码；
-- `agent_migration` 密码：`123456`；
-- `agent_reader` 密码：`123456`；
-- `agent_writer` 密码：`123456`。
-
-如果本机 root 密码已经改成其他值，修改 `mysql_env.sh` 顶部的
-`MYSQL_ROOT_PASSWORD`；也可以通过环境变量覆盖脚本中的默认值。
+脚本不包含默认密码。交互式运行时会以隐藏输入方式询问；CI 或非交互环境必须通过 `MYSQL_ROOT_PASSWORD`、`MYSQL_MIGRATION_PASSWORD`、`MYSQL_READER_PASSWORD` 和 `MYSQL_WRITER_PASSWORD` 注入。
 
 脚本可以重复运行。重复运行会确认账号密码并重新应用权限，不会删除数据库或表。
 
-初始化完成后，根目录的 `config.yaml` 已使用相同的本地默认密码：
-
-```yaml
-mysql:
-  accounts:
-    migration:
-      username: agent_migration
-      password: "123456"
-    reader:
-      username: agent_reader
-      password: "123456"
-    writer:
-      username: agent_writer
-      password: "123456"
-```
-
-`config.yaml` 已被 `.gitignore` 忽略，不应提交到代码仓库。
+`config.yaml` 已被 `.gitignore` 忽略；也可以只保留非敏感配置，将密码放入环境变量或 `.secrets.yaml`。
 
 ## 排查
 
@@ -54,7 +30,7 @@ scripts/mysql_env.sh grants
 scripts/mysql_env.sh tables
 ```
 
-`check` 也可以写成 `status`。脚本默认使用上面的本地密码；也可以通过环境变量临时覆盖：
+`check` 也可以写成 `status`。非交互运行示例：
 
 ```bash
 MYSQL_MIGRATION_PASSWORD='...' \
@@ -73,14 +49,46 @@ MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 scripts/mysql_env.sh check
 
 | 账号 | 权限 |
 | --- | --- |
-| `agent_migration` | `data_agent.*` 全部权限，用于迁移和建表 |
-| `agent_reader` | `SELECT`, `SHOW VIEW` |
-| `agent_writer` | `SELECT`, `INSERT`, `UPDATE` |
+| `agent_migration` | `data_agent.*` 全部权限，仅用于迁移、采集和索引发布 |
+| `agent_control` | 运行状态表读写、权限表和语义目录只读 |
+| `agent_reader` | 仅八张分析业务表的 `SELECT`, `SHOW VIEW` |
+| `agent_writer` | 仅 `products.product_name` 的受控 `UPDATE`（当前 API 未启用） |
 
-脚本不创建应用层登录用户。`config.yaml` 中的 `auth.demo_users` 是运行时 demo 用户，与 MySQL 账号不是一回事。
+先运行 `init` 创建数据库服务账号，应用全部 Migration 后必须运行 `harden` 写入表级授权。脚本不创建应用层登录用户；应用身份保存在 `app_users`，通过 `scripts/set_user_password.py` 设置密码。
 
 ## 注意事项
 
-密码现在明确写在本地脚本和被忽略的 `config.yaml` 中，仅适用于本机开发。生产环境应改用环境变量或密钥管理服务，并避免把密码写入命令历史。
+生产环境应使用部署平台的密钥管理能力；不要把密码写入仓库或命令行参数。
 
 如果应用运行在 Docker 容器中，需要把 `MYSQL_ACCOUNT_HOST` 改成应用容器的网络来源，或者为对应 host 单独创建账号；不要在生产环境直接使用 `'%'` 放开来源。
+
+## Schema 目录与 Milvus 索引
+
+先使用 migration 账号应用 `migrations/005_schema_rag.sql`，再执行：
+
+```bash
+# 只采集白名单 MySQL information_schema 并重建 BM25 词项
+python3.12 scripts/index_catalog.py --collect-only
+
+# 从当前权威 catalog_version 构建四层 Milvus 索引
+python3.12 scripts/index_catalog.py --index-only
+```
+
+不带参数时两步连续执行。脚本不会创建业务表、写入事实数据或
+原地删除 active collections。输出只包含版本、模型、维度和文档计数。
+
+## Schema RAG 评测
+
+索引激活后，可通过真实 MySQL、Milvus、Embedding 和 Reranker 运行 70 条
+Schema Linking 固定案例：
+
+```bash
+python3.12 scripts/evaluate_schema_rag.py
+
+# Reranker / dense-BM25 权重消融
+python3.12 scripts/evaluate_schema_rag.py --disable-reranker
+python3.12 scripts/evaluate_schema_rag.py --dense-weight 0.4
+```
+
+默认报告写入 `reports/schema-rag-evaluation.json`，包含 Object/Field Recall@K、
+Context Precision、P95 token、P95 latency、敏感字段泄漏数以及完整版本信息。

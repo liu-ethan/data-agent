@@ -1,6 +1,6 @@
 # Spec 07：评测、消融与发布收口
 
-状态：`Ready`
+状态：`Implemented`
 
 对应里程碑：M7
 

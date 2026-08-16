@@ -1,6 +1,6 @@
 # Spec 03：最小 Runtime Graph
 
-状态：`Ready`
+状态：`Implemented`
 
 对应里程碑：M3
 
@@ -164,3 +164,6 @@ SSE 事件最小结构：
 - Gateway 失败后的响应测试。
 - SSE 事件契约测试。
 - 10 条端到端 Golden Case。
+- `tests/test_llm.py`：Anthropic/OpenAI 线协议、thinking 隔离、Token/Cache 用量、超时、429 重试、401 立即失败和结构化响应失败。
+- `tests/test_query_grounding.py`：未受信表、字段、指标和不一致结构化草案在 Gateway 之前被拒绝。
+- `tests/test_graph.py::test_llm_agent_runs_typed_grounded_query_and_evidence_bound_answer`：TaskFrame、Grounded QueryPlan、ReadGateway 和 result_id 证据回答的完整链路。

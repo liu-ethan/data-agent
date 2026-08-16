@@ -1,6 +1,6 @@
 # Spec 04：Schema RAG 与 Coverage
 
-状态：`Ready`
+状态：`Implemented`
 
 对应里程碑：M4
 
@@ -136,3 +136,14 @@ Token 预算按最终 JSON 序列化文本计算，使用配置指定的 tokeniz
 - Recall@K、Context Precision、P95 token、P95 latency 报告。
 - 权限过滤测试。
 - SchemaGap 回归测试。
+
+当前实现证据（2026-08-16）：
+
+- `MySQLSchemaCollector` 真实查询 `information_schema.TABLES / COLUMNS / KEY_COLUMN_USAGE`，并对物理 Schema + 人工指标/别名/审核 Join 生成内容哈希版本。
+- `CatalogIndexBuilder` 在 Milvus Lite 中构建 Source/Object/Field/Relation 四层 staging collections，校验 Schema、维度和行数后切换 MySQL active manifest。
+- 本机实测：8 object、41 field、13 physical FK，FastEmbed `BAAI/bge-small-zh-v1.5` 512 维；四层文档数为 1/13/41/17。
+- `tests/test_milvus_catalog_index.py` 使用真实临时 Milvus Lite 验证四层构建、幂等重建、Manifest、维度、Source 和字段 Classification 过滤。
+- 100 source / 1000 table / 30000 field 的合成干扰集仍由 `tests/test_retrieval.py` 校验 TopK 和 3000 Token 上限。
+- 真实生产 HTTP Golden 评测 `reports/task3-production-evaluation.json`：10/10 通过，包含 8 SUCCEEDED、1 WAITING_FOR_USER 和 1 PERMISSION_DENIED。
+- 真实 Schema Linking 评测 `reports/schema-rag-evaluation.json`：70/70 通过；Object Recall@K 1.0、Field Recall@K 1.0、Context Precision 0.327571、P95 context token 2463（上限 3000）、P95 latency 3105.21ms、敏感候选泄漏 0。该报告固定记录 catalog/index/Embedding/Reranker 版本，可用 `make evaluate-rag` 重跑，并可用 `--disable-reranker` 或 `--dense-weight` 生成消融对照。
+- 关闭 Reranker 的同一组消融报告 `reports/schema-rag-evaluation-no-reranker.json` 同样为 70/70、Recall@K 1.0，P95 latency 从 3105.21ms 降至 18.66ms；说明当前 70 条确定性案例不足以体现 Reranker 的质量增益，但真实 Reranker 的延迟成本已被量化，不能据此虚构质量提升。

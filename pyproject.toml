@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-runtime-agent"
+version = "0.1.0"
+description = "Spec-driven ecommerce data runtime agent MVP"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.110",
+  "fastembed>=0.7",
+  "httpx[socks]>=0.27",
+  "PyJWT>=2.8",
+  "PyMySQL>=1.1",
+  "pandas>=2.0",
+  "pydantic>=2.6",
+  "pyyaml>=6.0",
+  "sqlglot>=25,<30",
+  "sqlalchemy>=2.0",
+  "langgraph>=0.2",
+  "uvicorn>=0.29",
+]
+
+[project.optional-dependencies]
+sql = ["sqlglot>=25,<30"]
+milvus = ["pymilvus==2.6.14", "milvus==2.3.5"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+markers = [
+  "mysql_integration: requires DRA_TEST_MYSQL=1 and a configured external MySQL",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.setuptools.packages.find]
+include = ["backend*"]

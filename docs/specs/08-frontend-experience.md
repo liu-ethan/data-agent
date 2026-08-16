@@ -1,6 +1,6 @@
 # Spec 08：Frontend 数据分析工作台
 
-状态：`Ready`
+状态：`Implemented`
 
 对应里程碑：M0、M3、M5、M7
 

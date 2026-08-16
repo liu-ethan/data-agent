@@ -8,15 +8,15 @@
 
 | 顺序 | Spec | 对应里程碑 | 状态 |
 | ---: | --- | --- | --- |
-| 0 | [00-engineering-foundation.md](./00-engineering-foundation.md) | M0 | Ready |
-| 1 | [01-domain-catalog-and-data.md](./01-domain-catalog-and-data.md) | M1 | Ready |
-| 2 | [02-read-gateway.md](./02-read-gateway.md) | M2 | Ready |
-| 3 | [03-runtime-graph.md](./03-runtime-graph.md) | M3 | Ready |
-| 4 | [04-schema-rag-and-coverage.md](./04-schema-rag-and-coverage.md) | M4 | Ready |
-| 5 | [05-memory-interrupts-and-artifacts.md](./05-memory-interrupts-and-artifacts.md) | M5 | Ready |
+| 0 | [00-engineering-foundation.md](./00-engineering-foundation.md) | M0 | Implemented |
+| 1 | [01-domain-catalog-and-data.md](./01-domain-catalog-and-data.md) | M1 | Implemented |
+| 2 | [02-read-gateway.md](./02-read-gateway.md) | M2 | Implemented |
+| 3 | [03-runtime-graph.md](./03-runtime-graph.md) | M3 | Implemented |
+| 4 | [04-schema-rag-and-coverage.md](./04-schema-rag-and-coverage.md) | M4 | Implemented |
+| 5 | [05-memory-interrupts-and-artifacts.md](./05-memory-interrupts-and-artifacts.md) | M5 | Implemented |
 | 6 | [06-write-gateway-and-hitl.md](./06-write-gateway-and-hitl.md) | M6 | Deferred |
-| 7 | [07-evaluation-and-release.md](./07-evaluation-and-release.md) | M7 | Ready |
-| 8 | [08-frontend-experience.md](./08-frontend-experience.md) | M0/M3/M5/M7 | Ready |
+| 7 | [07-evaluation-and-release.md](./07-evaluation-and-release.md) | M7 | Implemented |
+| 8 | [08-frontend-experience.md](./08-frontend-experience.md) | M0/M3/M5/M7 | Implemented |
 
 ## 当前计划中粒度偏粗的点
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Initialize and inspect the local MySQL environment for Data Runtime Agent.
-# Local-only credential defaults. Override them with environment variables when needed.
+# Credentials are read from environment variables or an interactive prompt.
 
 set -Eeuo pipefail
 
@@ -14,14 +14,15 @@ MYSQL_ROOT_USER="${MYSQL_ROOT_USER:-root}"
 MYSQL_ACCOUNT_HOST="${MYSQL_ACCOUNT_HOST:-localhost}"
 
 MYSQL_MIGRATION_USER="${MYSQL_MIGRATION_USER:-agent_migration}"
+MYSQL_CONTROL_USER="${MYSQL_CONTROL_USER:-agent_control}"
 MYSQL_READER_USER="${MYSQL_READER_USER:-agent_reader}"
 MYSQL_WRITER_USER="${MYSQL_WRITER_USER:-agent_writer}"
 
-# The current local root password. Change this line if the root password changes.
-MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-lxh152732}"
-MYSQL_MIGRATION_PASSWORD="${MYSQL_MIGRATION_PASSWORD:-123456}"
-MYSQL_READER_PASSWORD="${MYSQL_READER_PASSWORD:-123456}"
-MYSQL_WRITER_PASSWORD="${MYSQL_WRITER_PASSWORD:-123456}"
+MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-}"
+MYSQL_MIGRATION_PASSWORD="${MYSQL_MIGRATION_PASSWORD:-}"
+MYSQL_CONTROL_PASSWORD="${MYSQL_CONTROL_PASSWORD:-}"
+MYSQL_READER_PASSWORD="${MYSQL_READER_PASSWORD:-}"
+MYSQL_WRITER_PASSWORD="${MYSQL_WRITER_PASSWORD:-}"
 
 die() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -40,21 +41,24 @@ usage() {
   cat <<'EOF'
 Usage:
   scripts/mysql_env.sh init
+  scripts/mysql_env.sh harden
   scripts/mysql_env.sh check
   scripts/mysql_env.sh grants
   scripts/mysql_env.sh tables
   scripts/mysql_env.sh help
 
 Commands:
-  init     Create the database, accounts, and least-privilege grants. Safe to rerun.
+  init     Create the database and accounts; only migration receives privileges.
+  harden   Apply least-privilege grants after schemas and migrations exist.
   check    Check root access, database existence, account connections, and grants.
-  grants   Display grants for the three application accounts.
+  grants   Display grants for the four application accounts.
   tables   List tables currently present in the application database.
 
 Optional environment variables:
   MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_CHARSET, MYSQL_COLLATION
   MYSQL_ROOT_USER, MYSQL_ROOT_PASSWORD, MYSQL_ACCOUNT_HOST
   MYSQL_MIGRATION_USER, MYSQL_MIGRATION_PASSWORD
+  MYSQL_CONTROL_USER, MYSQL_CONTROL_PASSWORD
   MYSQL_READER_USER, MYSQL_READER_PASSWORD
   MYSQL_WRITER_USER, MYSQL_WRITER_PASSWORD
 
@@ -109,6 +113,7 @@ validate_configuration() {
   validate_identifier MYSQL_CHARSET "$MYSQL_CHARSET"
   validate_identifier MYSQL_COLLATION "$MYSQL_COLLATION"
   validate_identifier MYSQL_MIGRATION_USER "$MYSQL_MIGRATION_USER"
+  validate_identifier MYSQL_CONTROL_USER "$MYSQL_CONTROL_USER"
   validate_identifier MYSQL_READER_USER "$MYSQL_READER_USER"
   validate_identifier MYSQL_WRITER_USER "$MYSQL_WRITER_USER"
   validate_account_host
@@ -122,13 +127,6 @@ root_mysql_args() {
     ROOT_ARGS+=(--host="$MYSQL_HOST" --port="$MYSQL_PORT")
   fi
 
-  if [[ -n "$MYSQL_ROOT_PASSWORD" ]]; then
-    # This is convenient for local automation. Avoid exporting this variable
-    # globally; passing it only to the child process limits its lifetime.
-    ROOT_ARGS+=(--password="$MYSQL_ROOT_PASSWORD")
-  else
-    ROOT_ARGS+=(--password)
-  fi
 }
 
 app_mysql_args() {
@@ -140,18 +138,19 @@ app_mysql_args() {
     --host="$MYSQL_HOST"
     --port="$MYSQL_PORT"
     --user="$username"
-    --password="$password"
     --database="$MYSQL_DATABASE"
   )
+  APP_PASSWORD="$password"
 }
 
 run_as_root() {
   root_mysql_args
-  mysql "${ROOT_ARGS[@]}" "$@"
+  MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql "${ROOT_ARGS[@]}" "$@"
 }
 
 load_application_passwords() {
   read_secret MYSQL_MIGRATION_PASSWORD 'Migration 账号密码'
+  read_secret MYSQL_CONTROL_PASSWORD 'Control 账号密码'
   read_secret MYSQL_READER_PASSWORD 'Reader 账号密码'
   read_secret MYSQL_WRITER_PASSWORD 'Writer 账号密码'
 }
@@ -165,9 +164,11 @@ create_environment() {
   load_application_passwords
 
   local migration_password
+  local control_password
   local reader_password
   local writer_password
   migration_password="$(sql_literal "$MYSQL_MIGRATION_PASSWORD")"
+  control_password="$(sql_literal "$MYSQL_CONTROL_PASSWORD")"
   reader_password="$(sql_literal "$MYSQL_READER_PASSWORD")"
   writer_password="$(sql_literal "$MYSQL_WRITER_PASSWORD")"
 
@@ -179,6 +180,8 @@ CREATE DATABASE IF NOT EXISTS \`$MYSQL_DATABASE\`
 
 CREATE USER IF NOT EXISTS '$MYSQL_MIGRATION_USER'@'$MYSQL_ACCOUNT_HOST'
   IDENTIFIED BY '$migration_password';
+CREATE USER IF NOT EXISTS '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST'
+  IDENTIFIED BY '$control_password';
 CREATE USER IF NOT EXISTS '$MYSQL_READER_USER'@'$MYSQL_ACCOUNT_HOST'
   IDENTIFIED BY '$reader_password';
 CREATE USER IF NOT EXISTS '$MYSQL_WRITER_USER'@'$MYSQL_ACCOUNT_HOST'
@@ -186,6 +189,8 @@ CREATE USER IF NOT EXISTS '$MYSQL_WRITER_USER'@'$MYSQL_ACCOUNT_HOST'
 
 ALTER USER '$MYSQL_MIGRATION_USER'@'$MYSQL_ACCOUNT_HOST'
   IDENTIFIED BY '$migration_password';
+ALTER USER '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST'
+  IDENTIFIED BY '$control_password';
 ALTER USER '$MYSQL_READER_USER'@'$MYSQL_ACCOUNT_HOST'
   IDENTIFIED BY '$reader_password';
 ALTER USER '$MYSQL_WRITER_USER'@'$MYSQL_ACCOUNT_HOST'
@@ -193,10 +198,9 @@ ALTER USER '$MYSQL_WRITER_USER'@'$MYSQL_ACCOUNT_HOST'
 
 GRANT ALL PRIVILEGES ON \`$MYSQL_DATABASE\`.*
   TO '$MYSQL_MIGRATION_USER'@'$MYSQL_ACCOUNT_HOST';
-GRANT SELECT, SHOW VIEW ON \`$MYSQL_DATABASE\`.*
-  TO '$MYSQL_READER_USER'@'$MYSQL_ACCOUNT_HOST';
-GRANT SELECT, INSERT, UPDATE ON \`$MYSQL_DATABASE\`.*
-  TO '$MYSQL_WRITER_USER'@'$MYSQL_ACCOUNT_HOST';
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM '$MYSQL_READER_USER'@'$MYSQL_ACCOUNT_HOST';
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM '$MYSQL_WRITER_USER'@'$MYSQL_ACCOUNT_HOST';
 
 FLUSH PRIVILEGES;
 SQL
@@ -204,7 +208,57 @@ SQL
   info "初始化完成"
   printf '数据库: %s\n' "$MYSQL_DATABASE"
   printf '账号 host: %s\n' "$MYSQL_ACCOUNT_HOST"
-  printf '下一步：把本次输入的三个账号密码填入 config.yaml 的 mysql.accounts。\n'
+  printf '下一步：应用 Schema/Migration 后运行 scripts/mysql_env.sh harden。\n'
+}
+
+harden_grants() {
+  load_root_password
+  info "应用最小权限账号授权"
+  run_as_root <<SQL
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM '$MYSQL_READER_USER'@'$MYSQL_ACCOUNT_HOST';
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM '$MYSQL_WRITER_USER'@'$MYSQL_ACCOUNT_HOST';
+
+GRANT SELECT, SHOW VIEW ON \`$MYSQL_DATABASE\`.shops TO '$MYSQL_READER_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, SHOW VIEW ON \`$MYSQL_DATABASE\`.users TO '$MYSQL_READER_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, SHOW VIEW ON \`$MYSQL_DATABASE\`.categories TO '$MYSQL_READER_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, SHOW VIEW ON \`$MYSQL_DATABASE\`.products TO '$MYSQL_READER_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, SHOW VIEW ON \`$MYSQL_DATABASE\`.orders TO '$MYSQL_READER_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, SHOW VIEW ON \`$MYSQL_DATABASE\`.order_items TO '$MYSQL_READER_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, SHOW VIEW ON \`$MYSQL_DATABASE\`.refunds TO '$MYSQL_READER_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, SHOW VIEW ON \`$MYSQL_DATABASE\`.refund_items TO '$MYSQL_READER_USER'@'$MYSQL_ACCOUNT_HOST';
+
+GRANT SELECT ON \`$MYSQL_DATABASE\`.products TO '$MYSQL_WRITER_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT UPDATE (product_name) ON \`$MYSQL_DATABASE\`.products TO '$MYSQL_WRITER_USER'@'$MYSQL_ACCOUNT_HOST';
+
+GRANT SELECT ON \`$MYSQL_DATABASE\`.app_users TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.app_user_shop_scopes TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MYSQL_DATABASE\`.runtime_checkpoints TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MYSQL_DATABASE\`.runtime_checkpoint_history TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MYSQL_DATABASE\`.runtime_idempotency TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MYSQL_DATABASE\`.runtime_results TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MYSQL_DATABASE\`.runtime_events TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MYSQL_DATABASE\`.conversation_messages TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MYSQL_DATABASE\`.conversation_artifacts TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MYSQL_DATABASE\`.user_memories TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+
+GRANT SELECT ON \`$MYSQL_DATABASE\`.catalog_sources TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.catalog_objects TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.catalog_fields TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.metric_definitions TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.business_presets TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.table_relations TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.entity_aliases TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.permission_policies TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.catalog_object_metadata TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.catalog_field_metadata TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.catalog_metric_sources TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.catalog_relation_sources TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.catalog_search_documents TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.catalog_search_terms TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+GRANT SELECT ON \`$MYSQL_DATABASE\`.catalog_index_manifests TO '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
+FLUSH PRIVILEGES;
+SQL
 }
 
 check_root_and_database() {
@@ -224,7 +278,7 @@ check_application_account() {
   local password="$3"
 
   app_mysql_args "$username" "$password"
-  if mysql "${APP_ARGS[@]}" --batch --skip-column-names \
+  if MYSQL_PWD="$APP_PASSWORD" mysql "${APP_ARGS[@]}" --batch --skip-column-names \
       -e "SELECT CONCAT('$label connected as ', CURRENT_USER(), ', database ', DATABASE());"; then
     return 0
   fi
@@ -242,6 +296,7 @@ check_environment() {
 
   info "检查应用账号连接"
   check_application_account migration "$MYSQL_MIGRATION_USER" "$MYSQL_MIGRATION_PASSWORD" || failed=1
+  check_application_account control "$MYSQL_CONTROL_USER" "$MYSQL_CONTROL_PASSWORD" || failed=1
   check_application_account reader "$MYSQL_READER_USER" "$MYSQL_READER_PASSWORD" || failed=1
   check_application_account writer "$MYSQL_WRITER_USER" "$MYSQL_WRITER_PASSWORD" || failed=1
 
@@ -259,6 +314,7 @@ show_grants() {
   info "应用账号权限"
   run_as_root <<SQL
 SHOW GRANTS FOR '$MYSQL_MIGRATION_USER'@'$MYSQL_ACCOUNT_HOST';
+SHOW GRANTS FOR '$MYSQL_CONTROL_USER'@'$MYSQL_ACCOUNT_HOST';
 SHOW GRANTS FOR '$MYSQL_READER_USER'@'$MYSQL_ACCOUNT_HOST';
 SHOW GRANTS FOR '$MYSQL_WRITER_USER'@'$MYSQL_ACCOUNT_HOST';
 SQL
@@ -277,6 +333,9 @@ main() {
   case "${1:-help}" in
     init)
       create_environment
+      ;;
+    harden)
+      harden_grants
       ;;
     check|status)
       check_environment

@@ -1,6 +1,6 @@
 # Spec 05：记忆、Interrupt 与结果制品
 
-状态：`Ready`
+状态：`Implemented`
 
 对应里程碑：M5
 

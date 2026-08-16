@@ -1,0 +1,48 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: data_agent
+      MYSQL_USER: agent_migration
+      MYSQL_PASSWORD: ${DRA_MYSQL_MIGRATION_PASSWORD:?set DRA_MYSQL_MIGRATION_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+    ports: ["3306:3306"]
+    volumes: ["mysql_data:/var/lib/mysql"]
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DRA_ENVIRONMENT: local
+      DRA_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://192.168.1.120:5173,http://172.17.0.1:5173,http://172.18.0.1:5173
+      DRA_MYSQL_HOST: mysql
+      DRA_MYSQL_PORT: 3306
+      DRA_MYSQL_DATABASE: data_agent
+      DRA_MYSQL_MIGRATION_USERNAME: agent_migration
+      DRA_MYSQL_MIGRATION_PASSWORD: ${DRA_MYSQL_MIGRATION_PASSWORD:?set DRA_MYSQL_MIGRATION_PASSWORD}
+      DRA_MYSQL_CONTROL_USERNAME: agent_control
+      DRA_MYSQL_CONTROL_PASSWORD: ${DRA_MYSQL_CONTROL_PASSWORD:?set DRA_MYSQL_CONTROL_PASSWORD}
+      DRA_MYSQL_READER_USERNAME: agent_reader
+      DRA_MYSQL_READER_PASSWORD: ${DRA_MYSQL_READER_PASSWORD:?set DRA_MYSQL_READER_PASSWORD}
+      DRA_MYSQL_WRITER_USERNAME: agent_writer
+      DRA_MYSQL_WRITER_PASSWORD: ${DRA_MYSQL_WRITER_PASSWORD:?set DRA_MYSQL_WRITER_PASSWORD}
+      DRA_JWT_SECRET: ${DRA_JWT_SECRET:?set DRA_JWT_SECRET}
+      DRA_LLM_BASE_URL: ${DRA_LLM_BASE_URL:?set DRA_LLM_BASE_URL}
+      DRA_LLM_API_KEY: ${DRA_LLM_API_KEY:?set DRA_LLM_API_KEY}
+      DRA_LLM_MODEL: ${DRA_LLM_MODEL:?set DRA_LLM_MODEL}
+      DRA_LLM_PROTOCOL: ${DRA_LLM_PROTOCOL:-openai}
+      DRA_MILVUS_ENABLED: "true"
+      DRA_MILVUS_URI: /app/data/catalog.milvus.db
+    volumes: ["milvus_data:/app/data"]
+    ports: ["8000:8000"]
+    depends_on: [mysql]
+  frontend:
+    image: node:22-alpine
+    working_dir: /app
+    volumes: ["./frontend:/app"]
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports: ["5173:5173"]
+    depends_on: [backend]
+volumes:
+  mysql_data:
+  milvus_data:

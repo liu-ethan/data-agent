@@ -10,12 +10,17 @@ app:
   frontend_base_url: http://localhost:5173
   cors_origins:
     - http://localhost:5173
-  request_timeout_seconds: 35
+    - http://127.0.0.1:5173
+    - http://192.168.1.120:5173
+    - http://172.17.0.1:5173
+    - http://172.18.0.1:5173
+  request_timeout_seconds: 70
 
 server:
   host: 0.0.0.0
   port: 8000
-  reload: true
+  # Milvus Lite owns an exclusive file lock, so local runtime uses one process.
+  reload: false
   workers: 1
 
 auth:
@@ -25,10 +30,6 @@ auth:
     algorithm: HS256
     secret: CHANGE_ME_JWT_SECRET
     access_token_expire_minutes: 120
-  demo_users:
-    enabled: true
-    default_user_id: u_demo_user
-    default_admin_id: u_demo_admin
 
 mysql:
   host: localhost
@@ -42,6 +43,9 @@ mysql:
     migration:
       username: agent_migration
       password: "CHANGE_ME_MYSQL_PASSWORD"
+    control:
+      username: agent_control
+      password: "CHANGE_ME_MYSQL_PASSWORD"
     reader:
       username: agent_reader
       password: "CHANGE_ME_MYSQL_PASSWORD"
@@ -50,6 +54,8 @@ mysql:
       password: "CHANGE_ME_MYSQL_PASSWORD"
 
 milvus:
+  # Set true only after Milvus Lite/standalone is reachable and the index has
+  # been built with `python scripts/index_catalog.py`.
   enabled: false
   uri: http://localhost:19530
   token: ""
@@ -59,17 +65,29 @@ milvus:
     object: catalog_object
     field_entity: catalog_field_entity
     relation: catalog_relation
+  insert_batch_size: 256
 
-  temperature:
-    agent: 0.1
-    query_generation: 0.0
-    response: 0.2
-    summarizer: 0.0
-  max_output_tokens:
-    agent: 1200
-    query_generation: 1600
-    response: 1200
-    summarizer: 800
+catalog:
+  source:
+    source_id: mysql_ecommerce_local
+    name: Ecommerce MySQL
+    domain: ECOMMERCE_TRADE
+    # Production collection is explicitly allowlisted. Omitting this list
+    # indexes every non-excluded table in the configured database.
+    include_tables:
+      - shops
+      - users
+      - categories
+      - products
+      - orders
+      - order_items
+      - refunds
+      - refund_items
+    grain_overrides:
+      users: buyer
+    classification_overrides:
+      users.phone: PHONE
+      users.id_number: ID_CARD
 
 runtime_agent:
   max_iterations: 6
@@ -79,7 +97,7 @@ runtime_agent:
   max_analysis_calls: 1
   max_artifacts: 3
   max_rows_per_query: 1000
-  max_total_seconds: 30
+  max_total_seconds: 60
   stop_on_repeated_action: true
 
 retrieval_budget:
@@ -92,11 +110,36 @@ retrieval_budget:
   min_rerank_score: 0.55
   ambiguity_score_gap: 0.08
 
-# LLM 配置（兼容 OpenAI 接口协议，支持任意 OpenAI-compatible 服务）
+# LLM 配置（MiniMax 推荐 protocol=anthropic；也支持 OpenAI-compatible）
 llm:
   base_url: https://your-llm-provider/v1
   api_key: CHANGE_ME_LLM_API_KEY
   model: your-model-name
+  provider: your-provider-name
+  protocol: openai # use anthropic for MiniMax/Anthropic Messages API
+  timeout_seconds: 30
+  max_retries: 2
+  max_schema_repairs: 1
+  retry_base_seconds: 0.25
+  retry_cap_seconds: 5
+  trust_env: false
+  proxy_url: null
+  embedding:
+    provider: fastembed
+    model: BAAI/bge-small-zh-v1.5
+    cache_dir: .cache/fastembed
+  temperature:
+    agent: 0.1
+    query_generation: 0.0
+    response: 0.2
+    summarizer: 0.0
+    reranker: 0.0
+  max_output_tokens:
+    agent: 1200
+    query_generation: 1600
+    response: 1200
+    summarizer: 800
+    reranker: 800
 
 
 read_query:
@@ -147,6 +190,8 @@ write_gateway:
 
 permissions:
   default_policy_version: policy_local_v1
+  allowed_domains: [ECOMMERCE_TRADE]
+  allowed_source_ids: [mysql_ecommerce_local]
   denied_classifications:
     - PHONE
     - ID_CARD

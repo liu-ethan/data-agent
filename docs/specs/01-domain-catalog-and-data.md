@@ -1,6 +1,6 @@
 # Spec 01：电商数据与语义目录
 
-状态：`Ready`
+状态：`Implemented`
 
 对应里程碑：M1
 

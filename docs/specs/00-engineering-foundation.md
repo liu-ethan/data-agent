@@ -1,6 +1,6 @@
 # Spec 00：工程基线
 
-状态：`Ready`
+状态：`Implemented`
 
 对应里程碑：M0
 
