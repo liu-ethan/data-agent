@@ -1,6 +1,6 @@
 # Spec 03：最小 Runtime Graph
 
-状态：`Draft`
+状态：`Ready`
 
 对应里程碑：M3
 
@@ -31,17 +31,22 @@
 
 | Node | 职责 |
 | --- | --- |
-| `agent_node` | 生成 TaskFrame，选择 `RETRIEVE`、`GENERATE`、`ASK_USER`、`RESPOND` |
+| `agent_node` | 生成 TaskFrame，选择 `RETRIEVE`、`GENERATE`、`EXECUTE`、`ASK_USER`、`RESPOND` |
 | `retrieval_node` | 返回权限过滤后的 GroundedContext 和 Coverage |
 | `query_generation_node` | 生成 QuerySpec + CandidateSQL，或返回 SchemaGap |
 | `execution_gateway_node` | 调用 ReadGateway，返回 Observation |
 | `response_node` | 基于 result_id 和摘要输出回答与表格描述 |
+
+统一 Action 枚举为：`RETRIEVE`、`GENERATE`、`EXECUTE`、`ASK_USER`、`RESPOND`、`END`、`FAIL`。`EXECUTE` 是 Graph 的可观测 Action，即使实际执行由独立 ReadGateway 完成，也必须出现在状态和 SSE 中。
 
 ## 5. AgentState 最小字段
 
 ```json
 {
   "thread_id": "thread_1008",
+  "request_id": "req_1008",
+  "user_id": "u_east_user",
+  "status": "RUNNING",
   "task_frame": {},
   "context_frame": {},
   "grounded_context_id": null,
@@ -52,14 +57,18 @@
   "artifact_ids": [],
   "latest_observation": null,
   "goal_checklist": {},
+  "next_action": "RETRIEVE",
   "pending_interrupt": null,
   "budgets": {
     "iterations_used": 0,
     "retrieval_rounds_used": 0
   },
-  "action_history": []
+  "action_history": [],
+  "schema_version": "agent_state_v1"
 }
 ```
+
+`status` 为 `RUNNING`、`WAITING_FOR_USER`、`SUCCEEDED`、`FAILED`、`REJECTED` 或 `TIMEOUT`。`pending_interrupt` 在 M3 必须为 `null`；M5 才允许持久化和恢复 Interrupt。
 
 ## 6. 条件边不变量
 
@@ -71,6 +80,21 @@
 - 空结果不能自动扩大时间或删除用户过滤。
 - 权限失败立即终止。
 
+固定路由：
+
+| 当前条件 | 下一 Action |
+| --- | --- |
+| 首次请求且未完成 TaskFrame | `RETRIEVE` |
+| Coverage 为 `PARTIAL`、`AMBIGUOUS` 或 `UNKNOWN` | `RETRIEVE` 或 `ASK_USER` |
+| Coverage 为 `SUFFICIENT` 且没有 QueryPlan | `GENERATE` |
+| QueryPlan 通过结构校验 | `EXECUTE` |
+| Gateway 返回 `SUCCESS` 或 `EMPTY` | `RESPOND` |
+| Gateway 返回可重试错误且预算未耗尽 | `GENERATE`，最多重试一次 |
+| 权限拒绝、不可恢复错误或预算耗尽 | `FAIL` 或 `RESPOND` |
+| 已输出最终回答 | `END` |
+
+禁止 `GENERATE -> GENERATE` 无条件循环，也禁止 `EXECUTE` 绕过 ReadGateway。
+
 ## 7. API 最小契约
 
 ```text
@@ -78,15 +102,44 @@ POST /api/chat
 GET /api/results/{result_id}
 ```
 
-`POST /api/chat` 支持创建或继续 `thread_id`，通过 SSE 输出：
+请求：
+
+```json
+{
+  "thread_id": null,
+  "message": "昨天各品类 GMV 是多少？",
+  "user_id": "u_east_user",
+  "timezone": "Asia/Shanghai",
+  "request_id": "req_1008"
+}
+```
+
+响应必须返回 `request_id`、`thread_id`、`status` 和 SSE 地址或事件流。M3 的 `thread_id` 只支持同一请求链路关联，不承诺进程重启后恢复；恢复能力属于 Spec 05。
+
+SSE 事件最小结构：
+
+```json
+{
+  "event": "node.started",
+  "request_id": "req_1008",
+  "thread_id": "thread_1008",
+  "node": "retrieval_node",
+  "action": "RETRIEVE",
+  "status": "RUNNING",
+  "duration_ms": null,
+  "error_code": null
+}
+```
+
+允许的事件为 `run.started`、`node.started`、`node.completed`、`interrupt.created`、`run.completed` 和 `run.failed`。不得输出隐藏推理、完整 Prompt、原始密钥或完整结果集。
+
+`POST /api/chat` 支持创建请求，GET 结果接口只接受已授权的 `result_id`。
 
 - 当前 Node；
 - Action；
 - 状态摘要；
 - 最终回答；
 - 错误。
-
-不输出隐藏推理，不输出完整 Prompt。
 
 ## 8. 前端最小能力
 
@@ -102,6 +155,7 @@ GET /api/results/{result_id}
 - Trace 能看到真实 Node 循环、预算变化和 Gateway 结果。
 - 简单问题不发生无意义二次召回。
 - 所有 SQL 都经过 Spec 02 的 ReadGateway。
+- Action 序列与评测契约一致，包含 `EXECUTE`。
 
 ## 10. 测试证据
 

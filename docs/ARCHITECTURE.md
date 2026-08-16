@@ -99,6 +99,7 @@ MVP 不需要 MongoDB 或 Redis。会话、Checkpoint 和记忆可以先存 MySQ
 
 | 表/视图 | 粒度 | 关键字段 |
 | --- | --- | --- |
+| `shops` | 一行一个店铺 | `shop_id`、`shop_name`、`region_code`、`region_name`、`status` |
 | `orders` | 一行一个订单 | `order_id`、`user_id`、`shop_id`、`status`、`paid_at`、`pay_amount` |
 | `order_items` | 一行一个订单商品 | `order_item_id`、`order_id`、`shop_id`、`product_id`、`quantity`、`item_paid_amount` |
 | `products` | 一行一个商品 | `product_id`、`category_id`、`product_name` |
@@ -111,7 +112,7 @@ MVP 不需要 MongoDB 或 Redis。会话、Checkpoint 和记忆可以先存 MySQ
 
 | 指标 | 公式 | 时间字段 | 注意事项 |
 | --- | --- | --- | --- |
-| 支付 GMV | `SUM(orders.pay_amount)` | `orders.paid_at` | 只统计支付成功状态 |
+| 支付 GMV | `SUM(order_items.item_paid_amount)` | `orders.paid_at` | 只统计支付成功状态；按明细金额避免品类 Join 重复累计 |
 | 支付订单数 | `COUNT(DISTINCT orders.order_id)` | `orders.paid_at` | Join 明细后不能使用 `COUNT(*)` |
 | 支付买家数 | `COUNT(DISTINCT orders.user_id)` | `orders.paid_at` | 不需要 Join 用户表 |
 | 客单价 | GMV / 支付订单数 | `orders.paid_at` | 分母为 0 时返回 NULL |
@@ -352,7 +353,7 @@ retrieval_budget:
 
 ### 9.1 `agent_node`
 
-首轮将自然语言结构化为 TaskFrame；后续根据 Coverage、最新 Observation、GoalChecklist 和剩余预算选择 `RETRIEVE`、`GENERATE`、`ASK_USER` 或 `RESPOND`。
+首轮将自然语言结构化为 TaskFrame；后续根据 Coverage、最新 Observation、GoalChecklist 和剩余预算选择 `RETRIEVE`、`GENERATE`、`EXECUTE`、`ASK_USER` 或 `RESPOND`。
 
 ```json
 {
@@ -1012,7 +1013,7 @@ MVP 不需要真的部署几百个数据库。可以生成 100 个数据源、10
 | Context Precision | GroundedContext 中无关 Schema 的比例是否足够低 |
 | Schema Gap Recovery | 初始召回不完整时，Agent 能否用有限的第二轮 `retrieval_node` 补齐 |
 | Result Accuracy | 执行结果是否等于 Golden Result |
-| Action Routing Accuracy | `agent_node` 是否选择正确的 RETRIEVE/GENERATE/ASK_USER/RESPOND |
+| Action Routing Accuracy | `agent_node` 是否选择正确的 RETRIEVE/GENERATE/EXECUTE/ASK_USER/RESPOND |
 | Average Graph Steps | 简单和复杂任务平均顶层 Node 步数 |
 | Security Pass Rate | 越权和危险操作是否全部拦截 |
 | HITL Resume Success | 澄清/审批后是否正确恢复 |

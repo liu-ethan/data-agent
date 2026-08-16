@@ -46,6 +46,8 @@
 }
 ```
 
+`filters` 必须只包含一个已登记的主键或唯一键等值条件；不允许空条件、范围条件或模型拼接 SQL。`changes` 只能包含白名单字段，值按目录字段类型校验。MutationSpec 必须带 `request_id`、`user_id`、`permission_policy_version`、`data_version` 和 `idempotency_key`。
+
 ## 5. MutationPreview 契约
 
 ```json
@@ -61,9 +63,14 @@
   },
   "estimated_affected_rows": 1,
   "risk_level": "MEDIUM",
-  "expires_at": "2026-08-16T12:30:00+08:00"
+  "expires_at": "2026-08-16T12:30:00+08:00",
+  "data_version": "products_v18",
+  "permission_policy_version": "policy_v18",
+  "schema_version": "mutation_preview_v1"
 }
 ```
+
+Preview 必须保存完整的参数化 MutationSpec 和版本快照，不能只保存展示用 diff。确认时重新读取目标行并比较 `data_version`；版本变化必须使 preview 失效。
 
 ## 6. 必须拒绝
 
@@ -82,6 +89,8 @@
 - 恢复执行前重新读取 PermissionContext。
 - 审计能还原操作者、请求、前后值、审批和执行结果。
 - 同一审批只能提交一次。
+- 写入连接只能使用 `agent_writer`，migration 账号不能出现在运行时写入路径。
+- 所有变化都通过参数绑定执行；事务提交前后记录 affected rows 和数据版本。
 
 ## 8. 验收标准
 
@@ -100,4 +109,3 @@
 - HITL resume 测试。
 - 幂等提交测试。
 - 审计回放测试。
-

@@ -30,7 +30,7 @@ MVP 必须证明四件事：
 
 ### 2.1 P0：必须完成
 
-- 7 张电商业务表、指标目录和固定种子数据；
+- 8 张电商业务表、指标目录和固定种子数据；
 - 五个顶层 LangGraph Node；
 - 权限前置的 Schema 混合检索与 SchemaGap 补检；
 - SQLGlot AST、表列/行级权限、EXPLAIN、超时和结果契约；
@@ -77,8 +77,9 @@ MVP 必须证明四件事：
 - [ ] 创建 `backend`、`frontend`、`migrations`、`tests` 和 `configs` 目录；
 - [ ] 使用 Python、FastAPI、Pydantic、SQLAlchemy/Alembic 初始化后端；
 - [ ] 使用 React + TypeScript 初始化前端；
-- [ ] 编写 Docker Compose，第一版只启动 MySQL，Milvus 在 M4 接入；
+- [ ] 编写 Docker Compose，一条命令启动 MySQL、后端和前端；Milvus 在 M4 接入；
 - [ ] 建立 `.env.example`，区分 reader、writer 和 migration 账号；
+- [ ] 配置精确 frontend origin 白名单、OPTIONS 预检、Bearer Authorization 和 SSE 跨域；
 - [ ] 增加 `ruff`、类型检查、单元测试和前端检查命令；
 - [ ] 定义统一错误结构、Trace ID 和日志脱敏规则；
 - [ ] 建立 `docs/decisions`，记录重要架构取舍。
@@ -111,6 +112,7 @@ MVP 必须证明四件事：
 创建并填充：
 
 - `orders`
+- `shops`
 - `order_items`
 - `products`
 - `categories`
@@ -223,7 +225,7 @@ CandidateSQL
 
 实现五个顶层 Node：
 
-1. `agent_node`：首轮生成 TaskFrame，后续选择 `RETRIEVE / GENERATE / ASK_USER / RESPOND`；
+1. `agent_node`：首轮生成 TaskFrame，后续选择 `RETRIEVE / GENERATE / EXECUTE / ASK_USER / RESPOND`；
 2. `retrieval_node`：先调用可替换的 CatalogRetrievalService；
 3. `query_generation_node`：生成 QuerySpec + CandidateSQL，证据不足返回 SchemaGap；
 4. `execution_gateway_node`：只允许通过 M2 的 ReadGateway；
@@ -239,6 +241,8 @@ CandidateSQL
 - 空结果不能自动扩大时间或删除用户条件。
 
 ### 7.3 API 和最小前端
+
+前端详细契约、视觉方向、组件边界、响应式、无障碍、SSE 和 CORS 以 [Spec 08](./specs/08-frontend-experience.md) 为准。
 
 - `POST /api/chat`：创建或继续线程；
 - SSE：输出当前 Node、Action 和最终回答；
@@ -537,7 +541,7 @@ MutationSpec
 1. 初始化后端、前端、测试和 Docker Compose；
 2. 创建 MySQL reader/writer/migration 三类账号设计；
 3. 定义第一版 Pydantic 核心模型；
-4. 建立 7 张业务表和版本化语义目录的 migration；
+4. 建立 8 张业务表和版本化语义目录的 migration；
 5. 写 5 条最小 Golden Case；
 6. 写 10 条 SQL 安全失败用例；
 7. 确认一条人工 SQL 可以通过未来 ReadGateway 的接口返回 ResultObservation。
