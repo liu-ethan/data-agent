@@ -15,10 +15,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import BigInteger, Column, DateTime, Integer, MetaData, String, Table, Text, UniqueConstraint, and_, create_engine, select
+from sqlalchemy import BigInteger, Column, DateTime, Integer, MetaData, String, Table, Text, UniqueConstraint, and_, create_engine, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.engine import Engine, URL
 
+from ..auth import hash_password
 from ..errors import RuntimeAgentError
 from ..models import AgentState, ArtifactSpec, ArtifactType, Checkpoint, PermissionContext, RunStatus
 
@@ -101,6 +102,20 @@ class RuntimePersistence:
             Column("created_at", DateTime(timezone=True), nullable=False),
             Column("updated_at", DateTime(timezone=True), nullable=False),
             UniqueConstraint("user_id", "memory_key", name="uq_user_memory_key"))
+        self.invite_codes = Table("invite_codes", self.metadata,
+            Column("code", String(64), primary_key=True),
+            Column("role_name", String(32), nullable=False),
+            Column("max_uses", Integer, nullable=False, default=1),
+            Column("used_count", Integer, nullable=False, default=0),
+            Column("policy_version", String(128), nullable=False),
+            Column("created_by", String(255), nullable=False),
+            Column("created_at", DateTime(timezone=True), nullable=False),
+            Column("expires_at", DateTime(timezone=True), nullable=True),
+            Column("active", Integer, nullable=False, default=1))
+        self.thread_titles = Table("thread_titles", self.metadata,
+            Column("thread_id", String(255), primary_key=True),
+            Column("title", String(64), nullable=False),
+            Column("generated_at", DateTime(timezone=True), nullable=False))
         if create_schema:
             self.metadata.create_all(self.engine)
 
@@ -266,11 +281,17 @@ class RuntimePersistence:
                 self.messages.c.content, self.messages.c.created_at)
                 .where(self.messages.c.user_id == user_id)
                 .order_by(self.messages.c.created_at.desc()).limit(max(1, limit * 8))).mappings().all()
+            generated_rows = connection.execute(select(self.thread_titles.c.thread_id,
+                self.thread_titles.c.title, self.thread_titles.c.generated_at)).mappings().all()
+        titles_by_thread = {row["thread_id"]: row["title"] for row in generated_rows}
         threads: dict[str, dict[str, Any]] = {}
         for row in rows:
             item = threads.setdefault(row["thread_id"], {"thread_id": row["thread_id"],
-                "title": "未命名分析", "updated_at": _utc(row["created_at"]).isoformat()})
-            if row["role"] == "user" and item["title"] == "未命名分析":
+                "title": titles_by_thread.get(row["thread_id"], "未命名分析"),
+                "updated_at": _utc(row["created_at"]).isoformat()})
+            if row["thread_id"] in titles_by_thread:
+                item["title"] = titles_by_thread[row["thread_id"]]
+            elif row["role"] == "user" and item["title"] == "未命名分析":
                 item["title"] = str(row["content"])[:80]
         return list(threads.values())[:limit]
 
@@ -335,6 +356,74 @@ class RuntimePersistence:
         if not rows: return ""
         output = io.StringIO(); writer = csv.DictWriter(output, fieldnames=list(rows[0])); writer.writeheader(); writer.writerows(rows)
         return output.getvalue()
+
+    def consume_invite_code(self, code: str, role: str) -> dict[str, Any] | None:
+        """Atomically decrement the remaining uses for an active, unexpired invite.
+
+        Returns the invite row on success, None if the code cannot be consumed.
+        """
+        now = datetime.now(timezone.utc)
+        with self.engine.begin() as connection:
+            row = connection.execute(select(self.invite_codes)
+                .where(self.invite_codes.c.code == code)).mappings().first()
+            if not row:
+                return None
+            if not row["active"] or row["role_name"] != role:
+                return None
+            if row["used_count"] >= row["max_uses"]:
+                return None
+            expires_at = row["expires_at"]
+            if expires_at is not None and _utc(expires_at) <= now:
+                return None
+            consumed = connection.execute(update(self.invite_codes)
+                .where(and_(self.invite_codes.c.code == code,
+                            self.invite_codes.c.used_count < self.invite_codes.c.max_uses,
+                            self.invite_codes.c.active == 1))
+                .values(used_count=self.invite_codes.c.used_count + 1)).rowcount
+            if not consumed:
+                return None
+        return dict(row)
+
+    def register_user(self, *, account: str, password: str, role: str,
+                      policy_version: str) -> None:
+        """Provision a fresh identity with a freshly hashed password.
+
+        Raises ``RuntimeAgentError`` for duplicate accounts; invite consumption
+        is the caller's responsibility and must happen before this call.
+        """
+        now = datetime.now(timezone.utc)
+        password_hash = hash_password(password)
+        with self.engine.begin() as connection:
+            existing = connection.execute(select(self.app_users.c.user_id)
+                .where(self.app_users.c.user_id == account)).first()
+            if existing is not None:
+                raise RuntimeAgentError("ACCOUNT_TAKEN", "account already exists")
+            connection.execute(self.app_users.insert().values(
+                user_id=account, password_hash=password_hash,
+                role_name=role, active=1, policy_version=policy_version,
+                created_at=now, updated_at=now))
+
+    def save_thread_title(self, thread_id: str, title: str) -> None:
+        now = datetime.now(timezone.utc)
+        with self.engine.begin() as connection:
+            connection.execute(self.thread_titles.insert().prefix_with("IGNORE").values(
+                thread_id=thread_id, title=title, generated_at=now))
+
+    def load_thread_title(self, thread_id: str) -> str | None:
+        with self.engine.connect() as connection:
+            row = connection.execute(select(self.thread_titles.c.title)
+                .where(self.thread_titles.c.thread_id == thread_id)).first()
+        return str(row[0]) if row else None
+
+    def create_invite_code(self, *, code: str, role: str, max_uses: int,
+                           policy_version: str, created_by: str,
+                           expires_at: datetime | None) -> None:
+        with self.engine.begin() as connection:
+            connection.execute(self.invite_codes.insert().values(
+                code=code, role_name=role, max_uses=max_uses, used_count=0,
+                policy_version=policy_version, created_by=created_by,
+                created_at=datetime.now(timezone.utc), expires_at=expires_at,
+                active=1))
 
 
 class PersistentResultRepository:

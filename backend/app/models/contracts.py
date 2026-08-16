@@ -353,10 +353,39 @@ class PasswordLoginRequest(Contract):
                           json_schema_extra={"format": "password"})
 
 
+class RegisterRequest(Contract):
+    account: str = Field(min_length=3, max_length=64,
+                         pattern=r"^[A-Za-z0-9_.\-]+$")
+    password: str = Field(min_length=10, max_length=128,
+                          json_schema_extra={"format": "password"})
+    confirm_password: str = Field(min_length=10, max_length=128,
+                                  json_schema_extra={"format": "password"})
+    role: Literal["USER", "ADMIN"]
+    invite_code: str = Field(min_length=4, max_length=64)
+
+    @model_validator(mode="after")
+    def passwords_match(self) -> "RegisterRequest":
+        if self.password != self.confirm_password:
+            raise ValueError("passwords do not match")
+        return self
+
+
 class TokenResponse(Contract):
     access_token: str
     token_type: Literal["bearer"] = "bearer"
     expires_in: int = Field(gt=0)
+
+
+class RegistrationResponse(Contract):
+    status: Literal["registered"] = "registered"
+    account: str
+    role: Literal["USER", "ADMIN"]
+    schema_version: Literal["registration_response_v1"] = "registration_response_v1"
+
+
+class RecommendedQuestionsResponse(Contract):
+    items: list[str] = Field(default_factory=list)
+    schema_version: Literal["recommended_questions_v1"] = "recommended_questions_v1"
 
 
 class ChatRequest(Contract):
@@ -394,7 +423,9 @@ class RuntimeEvent(Contract):
     event: Literal[
         "run.started", "node.started", "node.completed",
         "interrupt.created", "run.completed", "run.failed",
+        "thread.title_updated",
     ]
+    thread_title: str | None = None
     request_id: str
     thread_id: str
     node: str | None = None

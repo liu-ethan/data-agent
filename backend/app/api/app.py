@@ -17,10 +17,26 @@ from ..bootstrap import RuntimeContainer, build_runtime_container
 from ..config import Settings, load_settings
 from ..errors import RuntimeAgentError
 from ..models import (ArtifactRecord, ChatRequest, ChatResponse, IdentityResponse,
-                     PasswordLoginRequest, PreferenceUpdate, ResultPage,
-                     ResumeRequest, RuntimeEvent, ThreadDetail,
-                     ThreadListResponse, TokenResponse, UserPreferences)
+                     PasswordLoginRequest, PreferenceUpdate,
+                     RecommendedQuestionsResponse, RegisterRequest,
+                     RegistrationResponse, ResultPage, ResumeRequest, RuntimeEvent,
+                     ThreadDetail, ThreadListResponse, TokenResponse,
+                     UserPreferences)
 from ..services.trace import new_trace
+
+
+_DEFAULT_RECOMMENDED_QUESTIONS = [
+    "昨天各品类的 GMV 是多少？",
+    "昨天销售额是多少？",
+    "昨天有多少已支付订单？",
+    "昨天每个店铺的支付买家数？",
+    "上周退款总金额是多少？",
+    "orders 表有哪些字段？",
+    "昨天哪几个品类的退款最多？",
+    "最近 7 天日均 GMV？",
+    "各品类订单占比？",
+    "products 表有哪些字段？",
+]
 
 
 def _interrupt_resumable(state: Any, checkpoint: Any, *, user_id: str,
@@ -112,6 +128,29 @@ def create_app(settings: Settings | None = None,
             access_token=token,
             expires_in=authenticator.expire_minutes * 60,
         )
+
+    @app.post("/api/auth/register", response_model=RegistrationResponse,
+              status_code=201)
+    async def register(body: RegisterRequest) -> RegistrationResponse:
+        invite = await asyncio.to_thread(
+            persistence.consume_invite_code, body.invite_code, body.role)
+        if not invite:
+            raise HTTPException(status_code=400, detail="INVITE_INVALID")
+        try:
+            await asyncio.to_thread(persistence.register_user,
+                account=body.account, password=body.password,
+                role=body.role, policy_version=str(invite["policy_version"]))
+        except RuntimeAgentError as exc:
+            if exc.error_code == "ACCOUNT_TAKEN":
+                raise HTTPException(status_code=409, detail="ACCOUNT_TAKEN") from exc
+            raise
+        return RegistrationResponse(account=body.account, role=body.role)
+
+    @app.get("/api/recommended_questions", response_model=RecommendedQuestionsResponse)
+    async def recommended_questions() -> RecommendedQuestionsResponse:
+        items = list(settings.raw.get("runtime_agent", {}).get(
+            "recommended_questions") or _DEFAULT_RECOMMENDED_QUESTIONS)
+        return RecommendedQuestionsResponse(items=items[:10])
 
     @app.get("/api/me", response_model=IdentityResponse)
     async def me(identity: Principal = Depends(principal)) -> IdentityResponse:

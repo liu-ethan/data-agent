@@ -1,4 +1,4 @@
-import type {StreamEvent} from './types'
+import type {RegisterRequest, RecommendedQuestionsResponse, RegistrationResponse, StreamEvent} from './types'
 
 export const API = import.meta.env.VITE_API_BASE_URL ?? ''
 
@@ -12,6 +12,9 @@ export function newClientRequestId():string{
 
 const ERROR_GUIDANCE:Record<string,string>={
   AUTH_REQUIRED:'请重新登录后继续。',AUTH_INVALID:'登录已失效，请重新登录。',
+  AUTH_INVALID_CREDENTIALS:'账号或密码不正确，请确认后重试。',
+  ACCOUNT_TAKEN:'该账号已被注册，请更换账号或直接登录。',
+  INVITE_INVALID:'邀请码无效、已用尽或已过期，请联系管理员。',
   PERMISSION_DENIED:'当前身份无权访问该数据，请调整范围或联系管理员。',
   QUERY_TIMEOUT:'查询超时，请缩短时间范围或减少维度。',
   QUERY_TOO_EXPENSIVE:'查询范围过大，请减少表、维度或时间跨度。',
@@ -45,6 +48,18 @@ export function isChartDsl(value:unknown):value is import('./types').ChartDsl{
   if(!value||typeof value!=='object')return false
   const item=value as Record<string,unknown>
   return ['bar','line','horizontal_bar'].includes(String(item.type))&&typeof item.result_id==='string'&&typeof item.category_field==='string'&&typeof item.value_field==='string'
+}
+
+export async function requestRegister(payload:RegisterRequest):Promise<RegistrationResponse>{
+  return requestJson<RegistrationResponse>('/api/auth/register',undefined,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload),
+  })
+}
+
+export async function requestRecommendedQuestions():Promise<string[]>{
+  const payload=await requestJson<RecommendedQuestionsResponse>('/api/recommended_questions')
+  return payload.items??[]
 }
 
 export async function consumeSse(args:{url:string;token:string;requestId:string;cursor:{lastEventId:number};signal:AbortSignal;onEvent:(event:StreamEvent)=>void|Promise<void>}):Promise<void>{

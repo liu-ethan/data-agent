@@ -55,6 +55,7 @@ def test_openapi_publishes_the_generated_sse_event_contract():
     assert event["properties"]["event"]["enum"] == [
         "run.started", "node.started", "node.completed",
         "interrupt.created", "run.completed", "run.failed",
+        "thread.title_updated",
     ]
     response = document["paths"]["/api/chat/stream"]["get"]["responses"]["200"]
     assert response["content"]["text/event-stream"]["schema"]["$ref"].endswith(

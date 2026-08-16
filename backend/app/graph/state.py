@@ -71,3 +71,8 @@ class ConversationalAnswerDraft(_LLMContract):
     answer: str = Field(min_length=1, max_length=2000)
     limitations: list[str] = Field(default_factory=list, max_length=10)
     schema_version: Literal["conversational_answer_v1"] = "conversational_answer_v1"
+
+
+class ThreadTitleDraft(_LLMContract):
+    title: str = Field(min_length=2, max_length=10)
+    schema_version: Literal["thread_title_v1"] = "thread_title_v1"

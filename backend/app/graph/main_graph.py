@@ -21,9 +21,10 @@ from ..models import (Action, AgentState, ChatResponse, Intent, PermissionContex
                       RunStatus, TaskFrame, TimeRange)
 from ..ports import (CatalogRetrievalPort, ReadGatewayPort, RuntimeStateStorePort,
                      StructuredLLMPort)
+from ..services.trace import record
 from .nodes import (agent_node, execution_gateway_node, query_generation_node,
                     response_node, retrieval_node)
-from .state import QueryDraft, TaskUnderstanding
+from .state import QueryDraft, TaskUnderstanding, ThreadTitleDraft
 
 
 class _Run(TypedDict, total=False):
@@ -273,11 +274,53 @@ class RuntimeGraph:
         }
         if final.status == RunStatus.SUCCEEDED:
             await self._emit(terminal_run, "run.completed", **terminal_payload)
+            await self._maybe_generate_thread_title(terminal_run, final, answer or "")
         elif final.status in {RunStatus.FAILED, RunStatus.REJECTED, RunStatus.TIMEOUT}:
             await self._emit(terminal_run, "run.failed",
                              error_code=terminal_error_code or "GRAPH_TERMINATED",
                              **terminal_payload)
         return ChatResponse(request_id=request_id, thread_id=thread_id, status=final.status, answer=answer, result_ids=final.result_ids, artifact_ids=final.artifact_ids, events=final.action_history, interrupt=final.pending_interrupt, state_version=checkpoint.state_version if checkpoint else None)
+
+    async def _maybe_generate_thread_title(self, run: _Run, final: AgentState,
+                                           answer: str) -> None:
+        """Fire-and-forget thread-title summarization for a successful first run."""
+        if not self.llm or not self.persistence:
+            return
+        thread_id = final.thread_id
+        user_id = final.user_id
+        if self.persistence.load_thread_title(thread_id):
+            return
+        question = final.task_frame.question if final.task_frame else ""
+        if not question:
+            return
+        asyncio.create_task(self._generate_thread_title(thread_id, user_id,
+                                                       question, answer))
+
+    async def _generate_thread_title(self, thread_id: str, user_id: str,
+                                    question: str, answer: str) -> None:
+        prompt = json.dumps({"question": question, "answer": answer[:400]},
+                            ensure_ascii=False)
+        try:
+            draft, _ = await self.llm.structured(
+                system="You are a concise thread-title writer for an ecommerce data analyst. Summarize the user's first question and the assistant's answer into a short Chinese title (no more than 10 Chinese characters, no punctuation, no quotes).",
+                user=prompt, schema=ThreadTitleDraft, purpose="thread_title",
+                temperature=0.2, prompt_version="thread_title_v1",
+            )
+            title = draft.title.strip()
+            if not title:
+                return
+            self.persistence.save_thread_title(thread_id, title)
+            await asyncio.to_thread(self.persistence.append_event,
+                f"title:{thread_id}", user_id, {
+                    "event": "thread.title_updated", "request_id": thread_id,
+                    "thread_id": thread_id, "node": None, "action": None,
+                    "status": "SUCCEEDED", "duration_ms": None,
+                    "error_code": None, "thread_title": title,
+                    "schema_version": "runtime_event_v1",
+                })
+        except Exception as exc:  # noqa: BLE001
+            record("thread_title.failed", thread_id=thread_id,
+                   error_type=type(exc).__name__, error_code=str(exc))
 
     def run(self, *, message: str, user_id: str, permission: PermissionContext,
             thread_id: str | None = None, request_id: str | None = None,

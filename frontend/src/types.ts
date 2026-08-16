@@ -13,3 +13,9 @@ export type Action = components['schemas']['Action']
 export type Message = {role:'user'|'assistant'|'system';content:string;created_at?:string}
 export type ChartDsl = {type:'bar'|'line'|'horizontal_bar';result_id:string;category_field:string;value_field:string}
 export type StreamEvent = RuntimeEvent & {eventId?:number}
+
+export type RegisterRequest = components['schemas']['RegisterRequest']
+export type RegistrationResponse = components['schemas']['RegistrationResponse']
+export type RecommendedQuestionsResponse = components['schemas']['RecommendedQuestionsResponse']
+
+export type Role = 'USER' | 'ADMIN'

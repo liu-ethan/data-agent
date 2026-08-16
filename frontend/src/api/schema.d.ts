@@ -397,6 +397,61 @@ export interface components {
              */
             password: string;
         };
+        /** RegisterRequest */
+        RegisterRequest: {
+            /** Account */
+            account: string;
+            /**
+             * Password
+             * Format: password
+             */
+            password: string;
+            /**
+             * Confirm Password
+             * Format: password
+             */
+            confirm_password: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "USER" | "ADMIN";
+            /** Invite Code */
+            invite_code: string;
+        };
+        /** RegistrationResponse */
+        RegistrationResponse: {
+            /**
+             * Status
+             * @default registered
+             * @constant
+             */
+            status: "registered";
+            /** Account */
+            account: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "USER" | "ADMIN";
+            /**
+             * Schema Version
+             * @default registration_response_v1
+             * @constant
+             */
+            schema_version: "registration_response_v1";
+        };
+        /** RecommendedQuestionsResponse */
+        RecommendedQuestionsResponse: {
+            /** Items */
+            items?: string[];
+            /**
+             * Schema Version
+             * @default recommended_questions_v1
+             * @constant
+             */
+            schema_version: "recommended_questions_v1";
+        };
         /** PreferenceUpdate */
         PreferenceUpdate: {
             /**
@@ -449,7 +504,7 @@ export interface components {
              * Event
              * @enum {string}
              */
-            event: "run.started" | "node.started" | "node.completed" | "interrupt.created" | "run.completed" | "run.failed";
+            event: "run.started" | "node.started" | "node.completed" | "interrupt.created" | "run.completed" | "run.failed" | "thread.title_updated";
             /** Request Id */
             request_id: string;
             /** Thread Id */
@@ -472,6 +527,8 @@ export interface components {
             /** State Version */
             state_version?: number | null;
             model_usage?: components["schemas"]["ModelUsage"] | null;
+            /** Thread Title */
+            thread_title?: string | null;
             /**
              * Schema Version
              * @default runtime_event_v1

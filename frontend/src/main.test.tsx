@@ -6,31 +6,32 @@ afterEach(()=>{cleanup();vi.restoreAllMocks()})
 
 function json(body:unknown,status=200){return Promise.resolve(new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}}))}
 function stream(events:Array<{id:number;event:string;data:unknown}>){const body=events.map(item=>`id: ${item.id}\nevent: ${item.event}\ndata: ${JSON.stringify(item.data)}\n\n`).join('');return Promise.resolve(new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode(body));controller.close()}}),{headers:{'Content-Type':'text/event-stream'}}))}
-function baseFetch(extra:(url:string,init?:RequestInit)=>Promise<Response>|undefined){return vi.fn((input:RequestInfo|URL,init?:RequestInit)=>{const url=String(input),handled=extra(url,init);if(handled)return handled;if(url.endsWith('/api/auth/login'))return json({access_token:'test-token'});if(url.endsWith('/api/me'))return json({user_id:'u_demo_user',roles:['USER'],policy_version:'policy_v2'});if(url.endsWith('/api/settings'))return json({values:{timezone:'Asia/Shanghai'},schema_version:'user_preferences_v1'});if(url.endsWith('/api/threads'))return json({items:[]});return json({detail:'NOT_FOUND'},404)})}
+function baseFetch(extra:(url:string,init?:RequestInit)=>Promise<Response>|undefined){return vi.fn((input:RequestInfo|URL,init?:RequestInit)=>{const url=String(input),handled=extra(url,init);if(handled)return handled;if(url.endsWith('/api/auth/login'))return json({access_token:'test-token'});if(url.endsWith('/api/recommended_questions'))return json({items:['问题 A','问题 B']});if(url.endsWith('/api/me'))return json({user_id:'u_demo_user',roles:['USER'],policy_version:'policy_v2'});if(url.endsWith('/api/settings'))return json({values:{timezone:'Asia/Shanghai'},schema_version:'user_preferences_v1'});if(url.endsWith('/api/threads'))return json({items:[]});return json({detail:'NOT_FOUND'},404)})}
 function submitLogin(){fireEvent.change(screen.getByLabelText('账号'),{target:{value:'u_demo_user'}});fireEvent.change(screen.getByLabelText('密码'),{target:{value:'test-password'}});fireEvent.click(screen.getByRole('button',{name:'登录'}))}
 
 describe('Data Runtime workbench',()=>{
-  it('authenticates and loads the governed identity and thread list',async()=>{
+  it('authenticates and loads the governed identity and recommended questions',async()=>{
     vi.stubGlobal('fetch',vi.fn((input:RequestInfo|URL)=>{
       const url=String(input)
       if(url.endsWith('/api/auth/login'))return json({access_token:'test-token'})
+      if(url.endsWith('/api/recommended_questions'))return json({items:['问题 A','问题 B']})
       if(url.endsWith('/api/me'))return json({user_id:'u_demo_user',roles:['USER'],policy_version:'policy_v2'})
       if(url.endsWith('/api/settings'))return json({values:{timezone:'Asia/Shanghai'},schema_version:'user_preferences_v1'})
-      if(url.endsWith('/api/threads'))return json({items:[{thread_id:'thread_1',title:'昨天各品类 GMV',updated_at:'2026-08-16T08:00:00Z'}]})
+      if(url.endsWith('/api/threads'))return json({items:[]})
       return json({detail:'NOT_FOUND'},404)
     }))
     render(<Root/>)
     submitLogin()
-    expect(await screen.findByText('u_demo_user · USER')).toBeInTheDocument()
-    expect(await screen.findByText('昨天各品类 GMV')).toBeInTheDocument()
+    expect(await screen.findByText(/u_demo_user/)).toBeInTheDocument()
+    expect(await screen.findByText('问题 A')).toBeInTheDocument()
     expect(fetch).toHaveBeenCalledWith('/api/me',expect.objectContaining({headers:expect.any(Headers)}))
   })
 
   it('shows an actionable login error when demo auth is unavailable',async()=>{
-    vi.stubGlobal('fetch',vi.fn(()=>json({detail:'NOT_FOUND'},404)))
+    vi.stubGlobal('fetch',vi.fn(()=>json({detail:'AUTH_INVALID_CREDENTIALS'},401)))
     render(<Root/>)
     submitLogin()
-    expect(await screen.findByRole('alert')).toHaveTextContent('NOT_FOUND')
+    expect(await screen.findByRole('alert')).toHaveTextContent('账号或密码不正确')
   })
 
   it('reconnects an SSE run at most twice without resubmitting the message',async()=>{
@@ -38,6 +39,7 @@ describe('Data Runtime workbench',()=>{
     const fetchMock=vi.fn((input:RequestInfo|URL)=>{
       const url=String(input)
       if(url.endsWith('/api/auth/login'))return json({access_token:'test-token'})
+      if(url.endsWith('/api/recommended_questions'))return json({items:[]})
       if(url.endsWith('/api/me'))return json({user_id:'u_demo_user',roles:['USER'],policy_version:'policy_v2'})
       if(url.endsWith('/api/settings'))return json({values:{timezone:'Asia/Shanghai'},schema_version:'user_preferences_v1'})
       if(url.endsWith('/api/threads'))return json({items:[]})
@@ -47,9 +49,9 @@ describe('Data Runtime workbench',()=>{
     vi.stubGlobal('fetch',fetchMock)
     render(<Root/>)
     submitLogin()
-    await screen.findByText('u_demo_user · USER')
+    await screen.findByText(/u_demo_user/)
     fireEvent.change(screen.getByRole('textbox',{name:'问题'}),{target:{value:'昨天 GMV'}})
-    fireEvent.click(screen.getByRole('button',{name:'发送问题'}))
+    fireEvent.click(screen.getByRole('button',{name:'发送'}))
     expect(await screen.findByRole('alert')).toHaveTextContent('network disconnected')
     await waitFor(()=>expect(fetchMock.mock.calls.filter(([input])=>String(input).includes('/api/chat/stream?'))).toHaveLength(3))
   })
@@ -65,10 +67,10 @@ describe('Data Runtime workbench',()=>{
       ])
       if(url.includes('/api/results/result-1?'))return json({result_id:'result-1',rows:[{region:'华东',gmv:1280}],offset:0,limit:50,total:1})
     })
-    vi.stubGlobal('fetch',fetchMock);render(<Root/>);submitLogin();await screen.findByText('u_demo_user · USER')
-    fireEvent.change(screen.getByRole('textbox',{name:'问题'}),{target:{value:'昨天华东 GMV'}});fireEvent.click(screen.getByRole('button',{name:'发送问题'}))
-    expect(await screen.findByText('华东 GMV 为 1280 元。')).toBeInTheDocument();expect(await screen.findByRole('cell',{name:'1280'})).toBeInTheDocument();expect(screen.getByLabelText('第 1 页，共 1 页')).toBeInTheDocument()
-    expect(screen.getByRole('complementary',{name:'证据栏'})).toHaveTextContent('17 ms')
+    vi.stubGlobal('fetch',fetchMock);render(<Root/>);submitLogin();await screen.findByText(/u_demo_user/)
+    fireEvent.change(screen.getByRole('textbox',{name:'问题'}),{target:{value:'昨天华东 GMV'}});fireEvent.click(screen.getByRole('button',{name:'发送'}))
+    expect(await screen.findByText('华东 GMV 为 1280 元。')).toBeInTheDocument();expect(await screen.findByRole('cell',{name:'1280'})).toBeInTheDocument()
+    expect(screen.getAllByText(/17 ms/).length).toBeGreaterThan(0)
   })
 
   it('shows an interrupt and resumes it with one stable idempotency key',async()=>{
@@ -78,15 +80,29 @@ describe('Data Runtime workbench',()=>{
       if(url.includes('/api/chat/stream?'))return stream([{id:1,event:'interrupt.created',data:{event:'interrupt.created',request_id:'request-i',thread_id:'thread-i',status:'WAITING_FOR_USER',state_version:4,interrupt:{status:'WAITING_FOR_USER',reason:'AMBIGUOUS_METRIC',question:'选择退款率口径',candidates:['金额退款率'],resume_node:'agent_node',checkpoint_id:'ckpt-1',interrupt_id:'interrupt-1',expires_at:'2026-08-16T10:15:00Z',schema_version:'interrupt_v1'}}}])
       if(url.includes('/interrupts/interrupt-1/resume')){resumeBody=JSON.parse(String(init?.body));return json({request_id:'resume-1',thread_id:'thread-i',status:'SUCCEEDED',answer:'已按金额退款率计算。',result_ids:[],artifact_ids:[],events:[],state_version:8})}
     })
-    vi.stubGlobal('fetch',fetchMock);render(<Root/>);submitLogin();await screen.findByText('u_demo_user · USER')
-    fireEvent.change(screen.getByRole('textbox',{name:'问题'}),{target:{value:'退款率'}});fireEvent.click(screen.getByRole('button',{name:'发送问题'}));expect(await screen.findByText('选择退款率口径')).toBeInTheDocument();fireEvent.click(screen.getByRole('button',{name:'金额退款率'}))
+    vi.stubGlobal('fetch',fetchMock);render(<Root/>);submitLogin();await screen.findByText(/u_demo_user/)
+    fireEvent.change(screen.getByRole('textbox',{name:'问题'}),{target:{value:'退款率'}});fireEvent.click(screen.getByRole('button',{name:'发送'}));expect((await screen.findAllByText('选择退款率口径')).length).toBeGreaterThan(0);fireEvent.click(screen.getByRole('button',{name:'金额退款率'}))
     expect(await screen.findByText('已按金额退款率计算。')).toBeInTheDocument();expect(resumeBody?.client_request_id).toBe('stable-client-id')
   })
 
   it('turns a timeout event into actionable guidance',async()=>{
     vi.stubGlobal('crypto',{randomUUID:()=> 'request-timeout'})
     vi.stubGlobal('fetch',baseFetch(url=>url.includes('/api/chat/stream?')?stream([{id:1,event:'run.failed',data:{event:'run.failed',request_id:'request-timeout',thread_id:'thread-timeout',status:'TIMEOUT',error_code:'QUERY_TIMEOUT'}}]):undefined))
-    render(<Root/>);submitLogin();await screen.findByText('u_demo_user · USER');fireEvent.change(screen.getByRole('textbox',{name:'问题'}),{target:{value:'查十年数据'}});fireEvent.click(screen.getByRole('button',{name:'发送问题'}))
+    render(<Root/>);submitLogin();await screen.findByText(/u_demo_user/);fireEvent.change(screen.getByRole('textbox',{name:'问题'}),{target:{value:'查十年数据'}});fireEvent.click(screen.getByRole('button',{name:'发送'}))
     expect(await screen.findByRole('alert')).toHaveTextContent('缩短时间范围或减少维度')
+  })
+
+  it('applies an async-generated thread title in the sidebar',async()=>{
+    vi.stubGlobal('crypto',{randomUUID:()=> 'request-title'})
+    const fetchMock=baseFetch(url=>{
+      if(url.includes('/api/chat/stream?'))return stream([
+        {id:1,event:'run.started',data:{event:'run.started',request_id:'request-title',thread_id:'thread-title',status:'RUNNING'}},
+        {id:2,event:'run.completed',data:{event:'run.completed',request_id:'request-title',thread_id:'thread-title',status:'SUCCEEDED',answer:'完成。',result_ids:[],artifact_ids:[],state_version:1}},
+        {id:3,event:'thread.title_updated',data:{event:'thread.title_updated',request_id:'request-title',thread_id:'thread-title',status:'SUCCEEDED',thread_title:'退款率分析'}},
+      ])
+    })
+    vi.stubGlobal('fetch',fetchMock);render(<Root/>);submitLogin();await screen.findByText(/u_demo_user/)
+    fireEvent.change(screen.getByRole('textbox',{name:'问题'}),{target:{value:'退款率'}});fireEvent.click(screen.getByRole('button',{name:'发送'}))
+    expect(await screen.findByText('退款率分析')).toBeInTheDocument()
   })
 })

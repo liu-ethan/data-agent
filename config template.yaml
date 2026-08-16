@@ -99,6 +99,18 @@ runtime_agent:
   max_rows_per_query: 1000
   max_total_seconds: 60
   stop_on_repeated_action: true
+  # Ten questions shown on a fresh session for first-time users.
+  recommended_questions:
+    - 昨天各品类的 GMV 是多少？
+    - 昨天销售额是多少？
+    - 昨天有多少已支付订单？
+    - 昨天每个店铺的支付买家数？
+    - 上周退款总金额是多少？
+    - orders 表有哪些字段？
+    - 昨天哪几个品类的退款最多？
+    - 最近 7 天日均 GMV？
+    - 各品类订单占比？
+    - products 表有哪些字段？
 
 retrieval_budget:
   max_source_candidates: 3
