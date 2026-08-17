@@ -71,6 +71,14 @@
 
 `golden_task_frame`、`required_objects`、`required_fields`、Action 序列和结果快照都必须非空。多轮、Interrupt 和 HITL 用例使用 `messages` 数组表达完整会话，不允许用单条消息代替多轮评测。
 
+可运行任务级用例必须覆盖问数和多轮，不能用 Schema 检索用例占满 80～100 条分母：
+
+- 问数类（`single_turn_data_query` / `metric_query` / `refund_query` / `empty_result` / `multi_step_data_query`）不少于 20 条；
+- 多轮类（`follow_up` / `multi_turn` / `checkpoint` / `long_term_memory`）不少于 12 条；
+- `schema_catalog` 不超过 25 条。大规模 Schema Linking 对照放在 `tests/schema_rag_cases.json`，由 `scripts/evaluate_schema_rag.py` 运行，不计入任务完成率。
+
+生产评测不得读取进程内 `AgentState`。`POST /api/chat` 的 `ChatResponse.evidence` 和终态 SSE 的 `RuntimeEvent.evidence` 必须带上公开评测字段：`intent`、`metric_ids`、`object_names`、`field_names`、`coverage`、`retrieval_rounds`、`grounded_context_tokens`、`schema_gap_recovered`。`schema_gap_recovered` 仅在召回轮次 ≥ 2 时取值，否则为 `null`。这些字段属于证据栏数据，不是隐藏推理。
+
 ## 5. 指标
 
 - Task Completion Rate。
@@ -118,6 +126,7 @@
 - 配置预算；
 - 每个指标的计算方式；
 - 失败案例；
+- 每个失败案例的改进过程（`reports/failure-improvements.json`：基线错误、代码改动、复现命令、复跑后结果）；
 - Trace 样本；
 - 可复现命令。
 - 数据库时区、评测时间锚点、随机种子、LLM provider/protocol/model 和 tokenizer 版本。
@@ -127,14 +136,15 @@
 - 评测脚本可重复运行并输出 JSON/CSV。
 - 每个简历数字能定位到数据集、代码版本和计算方式。
 - 至少保留 5 到 8 个失败案例及改进过程。
-- 演示可支持 2 分钟概览和 10 分钟深挖。
 - 未通过评测的能力在 README 中明确标记为设计目标或延期。
+- 2 分钟 / 10 分钟面试讲稿本轮不做，等生产 HTTP 报告达到可写入 README 的水平后再补。
 
 ## 9. 测试证据
 
 - 固定 eval cases。
+- `ChatResponse.evidence` / `RuntimeEvent.evidence` 可被生产 HTTP 评测采集。
 - 报告快照。
-- 消融结果表。
+- 消融结果表。生产 HTTP 报告的 `ablations` 必须来自 `production_ablations()`：SQL vs TCR 和 GroundedContext token 用当次 outcomes，不得回填 test-double 数字。
 - 安全测试汇总。
 - Trace 审查记录。
 - 每个失败 case 的错误码、最后 Action、版本信息和最小复现命令。

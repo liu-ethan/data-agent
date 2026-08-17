@@ -80,7 +80,7 @@ python3.12 scripts/index_catalog.py --index-only
 ## Schema RAG 评测
 
 索引激活后，可通过真实 MySQL、Milvus、Embedding 和 Reranker 运行 70 条
-Schema Linking 固定案例：
+Schema Linking 固定案例（`tests/schema_rag_cases.json`）：
 
 ```bash
 python3.12 scripts/evaluate_schema_rag.py
@@ -92,3 +92,20 @@ python3.12 scripts/evaluate_schema_rag.py --dense-weight 0.4
 
 默认报告写入 `reports/schema-rag-evaluation.json`，包含 Object/Field Recall@K、
 Context Precision、P95 token、P95 latency、敏感字段泄漏数以及完整版本信息。
+
+## 任务级评测
+
+```bash
+# 确定性 test-double，报告标记 non_production
+python3.12 scripts/run_evaluation.py --allow-test-double
+
+# 复现单个失败 case
+python3.12 scripts/run_evaluation.py --allow-test-double --case-id eval_001
+
+# 生产 HTTP 评测（需要已启动的后端和账号密码）
+python3.12 scripts/run_production_evaluation.py --account u_demo_user
+```
+
+任务级报告写入 `reports/evaluation.json` / `reports/production-evaluation.json`，
+包含分子、分母、过滤条件、消融对照、最多 8 条失败案例和可复现命令。
+HITL/写入 case 带 `deferred_reason=spec_06_write_gateway`，不计入完成率。

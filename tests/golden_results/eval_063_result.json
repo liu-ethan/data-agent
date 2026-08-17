@@ -1,1 +1,7 @@
-{"type":"FIELD_LIST","row_order":"explicit"}
+{
+  "columns": [
+    "category_name",
+    "refund_amount"
+  ],
+  "numeric_scale": 2
+}

@@ -29,9 +29,11 @@ frontend/test-results/
 frontend/playwright-report/
 frontend/tsconfig.tsbuildinfo
 
-# Generated evaluation reports (reproduced by make evaluate-rag)
+# Generated evaluation reports (reproduced by make evaluate / run_production_evaluation.py).
+# Keep the Spec 07 failure-improvement log; it is hand-maintained evidence, not a run snapshot.
 reports/*.json
 reports/*.csv
+!reports/failure-improvements.json
 
 # Local-only helper with hardcoded MySQL passwords
 scripts/setup_local.sh

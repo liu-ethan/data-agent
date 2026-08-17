@@ -59,8 +59,19 @@ INSERT INTO metric_definitions(metric_id,name,formula,time_field,grain_json,requ
 ('paid_order_count','支付订单数','COUNT(DISTINCT orders.order_id)','orders.paid_at','["day","shop"]','["orders.status = PAID"]','["count_star_after_one_to_many"]','empty_denominator_returns_null','INTEGER','metric_v1'),
 ('paid_buyer_count','支付买家数','COUNT(DISTINCT orders.user_id)','orders.paid_at','["day","shop"]','["orders.status = PAID"]','[]','empty_denominator_returns_null','INTEGER','metric_v1'),
 ('refund_amount','退款金额','SUM(refunds.refund_amount)','refunds.refunded_at','["day","shop"]','["refunds.status = SUCCESS"]','["raw_fact_to_raw_fact_sum"]','empty_denominator_returns_null','DECIMAL(2)','metric_v1'),
-('refund_rate','金额退款率','refund_amount / gmv','refunds.refunded_at','["day","shop"]','["refunds.status = SUCCESS"]','["zero_denominator"]','empty_denominator_returns_null','DECIMAL(4)','metric_v1')
+('refund_rate','金额退款率','refund_amount / gmv','refunds.refunded_at','["day","shop"]','["refunds.status = SUCCESS"]','["zero_denominator"]','empty_denominator_returns_null','DECIMAL(4)','metric_v1'),
+('average_order_value','客单价','SUM(order_items.item_paid_amount) / COUNT(DISTINCT orders.order_id)','orders.paid_at','["day","shop"]','["orders.status = PAID"]','["zero_denominator"]','empty_denominator_returns_null','DECIMAL(2)','metric_v1'),
+('category_gmv','品类 GMV','SUM(order_items.item_paid_amount)','orders.paid_at','["day","category"]','["orders.status = PAID"]','["raw_fact_to_raw_fact_sum"]','empty_denominator_returns_null','DECIMAL(2)','metric_v1')
 ON DUPLICATE KEY UPDATE name=VALUES(name),formula=VALUES(formula),metric_version=VALUES(metric_version);
+INSERT INTO catalog_metric_sources(metric_id,source_id) VALUES
+('gmv','mysql_ecommerce_local'),
+('paid_order_count','mysql_ecommerce_local'),
+('paid_buyer_count','mysql_ecommerce_local'),
+('refund_amount','mysql_ecommerce_local'),
+('refund_rate','mysql_ecommerce_local'),
+('average_order_value','mysql_ecommerce_local'),
+('category_gmv','mysql_ecommerce_local')
+ON DUPLICATE KEY UPDATE source_id=VALUES(source_id);
 INSERT INTO table_relations(relation_id,left_ref,right_ref,cardinality,verified,relation_version) VALUES
 ('orders_to_order_items','orders.order_id','order_items.order_id','one_to_many',TRUE,'relation_v1'),
 ('order_items_to_products','order_items.product_id','products.product_id','many_to_one',TRUE,'relation_v1'),
@@ -73,5 +84,7 @@ INSERT INTO entity_aliases(alias_id,alias_text,target_type,target_id,version) VA
 ('alias_gmv','销售额','METRIC','gmv','alias_v1'),
 ('alias_gmv_cny','成交额','METRIC','gmv','alias_v1'),
 ('alias_category','类目','DIMENSION','categories.category_name','alias_v1'),
-('alias_category_cn','品类','DIMENSION','categories.category_name','alias_v1')
+('alias_category_cn','品类','DIMENSION','categories.category_name','alias_v1'),
+('alias_aov','客单价','METRIC','average_order_value','alias_v1'),
+('alias_shop','店铺','DIMENSION','shops.shop_name','alias_v1')
 ON DUPLICATE KEY UPDATE target_id=VALUES(target_id),version=VALUES(version);

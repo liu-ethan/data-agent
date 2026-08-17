@@ -1,6 +1,6 @@
 PYTHON ?= python
 
-.PHONY: test test-mysql lint typecheck format backend frontend frontend-build frontend-test contracts collect-catalog index-catalog evaluate-rag
+.PHONY: test test-mysql lint typecheck format backend frontend frontend-build frontend-test contracts collect-catalog index-catalog evaluate-rag evaluate evaluate-production
 test:
 	$(PYTHON) -m pytest -q
 test-mysql:
@@ -30,3 +30,7 @@ collect-catalog:
 	$(PYTHON) scripts/index_catalog.py --collect-only
 evaluate-rag:
 	$(PYTHON) scripts/evaluate_schema_rag.py
+evaluate:
+	$(PYTHON) scripts/run_evaluation.py --allow-test-double
+evaluate-production:
+	$(PYTHON) scripts/run_production_evaluation.py --account u_demo_user

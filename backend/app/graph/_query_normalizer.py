@@ -26,6 +26,16 @@ from ._sql_canonicalizer import canonicalize_parameters
 from .state import QueryDraft
 
 _VALID_ALIAS = re.compile(r"[a-z][a-z0-9_]*")
+_METRIC_ALIASES = {
+    "aov": "average_order_value",
+    "average_order_value": "average_order_value",
+    "gmv": "gmv",
+    "category_gmv": "category_gmv",
+    "paid_order_count": "paid_order_count",
+    "paid_buyer_count": "paid_buyer_count",
+    "refund_amount": "refund_amount",
+    "refund_rate": "refund_rate",
+}
 
 
 def _canonical_metric_name(raw: str) -> str:
@@ -36,8 +46,14 @@ def _canonical_metric_name(raw: str) -> str:
     get normalized to ``gmv``.
     """
     lowered = raw.lower()
-    if _VALID_ALIAS.fullmatch(lowered):
-        return lowered
+    if lowered in _METRIC_ALIASES:
+        return _METRIC_ALIASES[lowered]
+    if "客单价" in raw or "客单" in raw:
+        return "average_order_value"
+    if "退款率" in raw or "refund_rate" in lowered:
+        return "refund_rate"
+    if "品类" in raw and ("gmv" in lowered or "销售" in raw or "成交" in raw):
+        return "category_gmv"
     if "gmv" in lowered or "成交额" in raw or "销售额" in raw:
         return "gmv"
     if "退款" in raw or "refund" in lowered:
@@ -46,6 +62,8 @@ def _canonical_metric_name(raw: str) -> str:
         return "paid_buyer_count"
     if "订单" in raw or "order" in lowered:
         return "paid_order_count"
+    if _VALID_ALIAS.fullmatch(lowered):
+        return lowered
     return re.sub(r"[^a-z0-9_]+", "_", lowered).strip("_") or "metric"
 
 
@@ -57,7 +75,7 @@ def _alias_for(expression: exp.Expression, fallback: str) -> str:
     return fallback
 
 
-def normalize_query_draft(draft: QueryDraft) -> QueryDraft:
+def normalize_query_draft(draft: QueryDraft, context=None) -> QueryDraft:
     """Return a normalized draft: aliases, metric ids and the PAID filter.
 
     The function never touches the database. Side-effects on
@@ -68,11 +86,11 @@ def normalize_query_draft(draft: QueryDraft) -> QueryDraft:
         return draft
 
     try:
-        tree = sqlglot.parse_one(canonicalize_parameters(
-            draft.candidate_sql, draft.parameters), read="mysql")
+        tree = sqlglot.parse_one(
+            canonicalize_parameters(draft.candidate_sql, draft.parameters), read="mysql"
+        )
     except Exception as exc:
-        raise RuntimeAgentError("SQL_PARSE_ERROR",
-                                "generated SQL could not be normalized") from exc
+        raise RuntimeAgentError("SQL_PARSE_ERROR", "generated SQL could not be normalized") from exc
 
     metric_names = [_canonical_metric_name(ref) for ref in draft.metric_refs]
 
@@ -93,9 +111,13 @@ def normalize_query_draft(draft: QueryDraft) -> QueryDraft:
     if expressions and isinstance(tree, exp.Select):
         tree.set("expressions", expressions)
 
-    needs_paid = any(name in {"gmv", "paid_order_count"} for name in metric_names)
-    orders = next((table for table in tree.find_all(exp.Table)
-                   if table.name.lower() == "orders"), None)
+    needs_paid = any(
+        name in {"gmv", "paid_order_count", "average_order_value", "category_gmv"}
+        for name in metric_names
+    )
+    orders = next(
+        (table for table in tree.find_all(exp.Table) if table.name.lower() == "orders"), None
+    )
     has_status = any(
         column.name.lower() == "status"
         and (column.table in {"", orders.alias_or_name if orders else ""})
@@ -104,23 +126,71 @@ def normalize_query_draft(draft: QueryDraft) -> QueryDraft:
     parameters = dict(draft.parameters)
     if needs_paid and orders and not has_status and isinstance(tree, exp.Select):
         parameters["metric_status"] = "PAID"
-        tree = tree.where(exp.column("status",
-                                     table=orders.alias_or_name
-                                     ).eq(exp.Placeholder(this="metric_status")),
-                          append=True)
+        tree = tree.where(
+            exp.column("status", table=orders.alias_or_name).eq(
+                exp.Placeholder(this="metric_status")
+            ),
+            append=True,
+        )
 
-    return draft.model_copy(update={
-        "candidate_sql": tree.sql(dialect="mysql"),
-        "parameters": parameters,
-        "expected_columns": aliases,
-    })
+    object_ids = list(draft.required_object_ids)
+    if context is not None:
+        name_to_id = {item.name.lower(): item.object_id for item in context.objects}
+        sql_ids = [
+            name_to_id[table.name.lower()]
+            for table in tree.find_all(exp.Table)
+            if table.name.lower() in name_to_id
+        ]
+        object_ids = list(dict.fromkeys([*object_ids, *sql_ids]))
+
+    return draft.model_copy(
+        update={
+            "candidate_sql": tree.sql(dialect="mysql"),
+            "parameters": parameters,
+            "expected_columns": aliases,
+            "metric_refs": metric_names or list(draft.metric_refs),
+            "required_object_ids": object_ids,
+        }
+    )
 
 
-def build_query_plan_or_gap(draft: QueryDraft, *, context, task_frame,
-                            permission_policy_version: str,
-                            max_rows: int,
-                            llm_active: bool) -> tuple[QueryPlan | None,
-                                                     SchemaGap | None]:
+def bind_draft_to_context(draft: QueryDraft, context, task_frame=None) -> QueryDraft:
+    """Keep only catalog-proven metric and dimension refs after SQL normalize."""
+    draft = normalize_query_draft(draft, context=context)
+    grounded_metrics = set(context.metrics or [])
+    preferred = [
+        item
+        for item in ((task_frame.metric_ids if task_frame else []) or [])
+        if item in grounded_metrics
+    ]
+    metric_refs = preferred or [item for item in draft.metric_refs if item in grounded_metrics]
+    if not metric_refs:
+        metric_refs = list(context.metrics or [])
+    allowed_fields = {item.name.lower() for item in context.fields} | {
+        item.field_id.lower() for item in context.fields
+    }
+    dimension_refs = [item for item in draft.dimension_refs if item.lower() in allowed_fields]
+    if task_frame and task_frame.dimension_ids:
+        dimension_refs = list(
+            dict.fromkeys(
+                [
+                    *[item for item in task_frame.dimension_ids if item.lower() in allowed_fields],
+                    *dimension_refs,
+                ]
+            )
+        )
+    return draft.model_copy(update={"metric_refs": metric_refs, "dimension_refs": dimension_refs})
+
+
+def build_query_plan_or_gap(
+    draft: QueryDraft,
+    *,
+    context,
+    task_frame,
+    permission_policy_version: str,
+    max_rows: int,
+    llm_active: bool,
+) -> tuple[QueryPlan | None, SchemaGap | None]:
     """Validate ``draft`` against the grounded context and return either
     a ``QueryPlan`` (status QUERY_PLAN) or a ``SchemaGap`` (status
     SCHEMA_GAP)."""
@@ -131,7 +201,7 @@ def build_query_plan_or_gap(draft: QueryDraft, *, context, task_frame,
             candidate_object_ids=draft.required_object_ids,
             narrow_query=task_frame.question,
             reason="LLM requested more schema evidence",
-            retrieval_round=0,
+            retrieval_round=1,
         )
 
     GroundingValidator.validate(draft, context)
@@ -150,8 +220,7 @@ def build_query_plan_or_gap(draft: QueryDraft, *, context, task_frame,
     plan = QueryPlan(
         query_plan_id="plan",
         query_spec=spec,
-        candidate_sql=canonicalize_parameters(
-            draft.candidate_sql, draft.parameters),
+        candidate_sql=canonicalize_parameters(draft.candidate_sql, draft.parameters),
         parameters=draft.parameters,
         catalog_version=context.catalog_version,
         permission_policy_version=permission_policy_version,

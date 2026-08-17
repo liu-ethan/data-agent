@@ -1,0 +1,970 @@
+[
+  {
+    "case_id": "eval_031",
+    "category": "single_turn_data_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天 GMV 是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "gmv"
+      ]
+    },
+    "required_objects": [
+      "orders",
+      "order_items"
+    ],
+    "required_fields": [
+      "orders.paid_at",
+      "order_items.item_paid_amount"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_031_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_032",
+    "category": "single_turn_data_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天支付 GMV 是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "gmv"
+      ]
+    },
+    "required_objects": [
+      "orders",
+      "order_items"
+    ],
+    "required_fields": [
+      "orders.paid_at",
+      "order_items.item_paid_amount"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_032_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_033",
+    "category": "single_turn_data_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天成交额是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "gmv"
+      ]
+    },
+    "required_objects": [
+      "orders",
+      "order_items"
+    ],
+    "required_fields": [
+      "orders.paid_at",
+      "order_items.item_paid_amount"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_033_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_034",
+    "category": "metric_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天客单价是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "average_order_value"
+      ]
+    },
+    "required_objects": [
+      "orders",
+      "order_items"
+    ],
+    "required_fields": [
+      "orders.paid_at",
+      "order_items.item_paid_amount"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_034_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_035",
+    "category": "metric_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天金额退款率是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "refund_rate"
+      ]
+    },
+    "required_objects": [
+      "refunds",
+      "orders",
+      "order_items"
+    ],
+    "required_fields": [
+      "refunds.refunded_at"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_035_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_036",
+    "category": "single_turn_data_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天各店铺 GMV 是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "gmv"
+      ],
+      "dimension_ids": [
+        "shops.shop_name"
+      ]
+    },
+    "required_objects": [
+      "orders",
+      "order_items",
+      "shops"
+    ],
+    "required_fields": [
+      "orders.paid_at",
+      "order_items.item_paid_amount"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_036_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_037",
+    "category": "metric_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天各品类支付订单数是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "paid_order_count"
+      ],
+      "dimension_ids": [
+        "categories.category_name"
+      ]
+    },
+    "required_objects": [
+      "orders",
+      "order_items",
+      "products",
+      "categories"
+    ],
+    "required_fields": [
+      "orders.paid_at"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_037_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_038",
+    "category": "single_turn_data_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "上周 GMV 是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "gmv"
+      ]
+    },
+    "required_objects": [
+      "orders",
+      "order_items"
+    ],
+    "required_fields": [
+      "orders.paid_at",
+      "order_items.item_paid_amount"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_038_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_039",
+    "category": "single_turn_data_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "本月 GMV 是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "gmv"
+      ]
+    },
+    "required_objects": [
+      "orders",
+      "order_items"
+    ],
+    "required_fields": [
+      "orders.paid_at",
+      "order_items.item_paid_amount"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_039_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_040",
+    "category": "refund_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "上月退款金额是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "refund_amount"
+      ]
+    },
+    "required_objects": [
+      "refunds"
+    ],
+    "required_fields": [
+      "refunds.refunded_at"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_040_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_041",
+    "category": "single_turn_data_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天支付成功订单的 GMV 是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "gmv"
+      ]
+    },
+    "required_objects": [
+      "orders",
+      "order_items"
+    ],
+    "required_fields": [
+      "orders.paid_at",
+      "order_items.item_paid_amount"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_041_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_042",
+    "category": "refund_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天成功退款金额是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "refund_amount"
+      ]
+    },
+    "required_objects": [
+      "refunds"
+    ],
+    "required_fields": [
+      "refunds.refunded_at"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_042_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_043",
+    "category": "metric_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天已支付买家数是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "paid_buyer_count"
+      ]
+    },
+    "required_objects": [
+      "orders"
+    ],
+    "required_fields": [
+      "orders.paid_at"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_043_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_044",
+    "category": "metric_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天已支付订单数是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "paid_order_count"
+      ]
+    },
+    "required_objects": [
+      "orders"
+    ],
+    "required_fields": [
+      "orders.paid_at"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_044_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_045",
+    "category": "single_turn_data_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天销售额是多少（支付口径）？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "gmv"
+      ]
+    },
+    "required_objects": [
+      "orders",
+      "order_items"
+    ],
+    "required_fields": [
+      "orders.paid_at",
+      "order_items.item_paid_amount"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_045_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_046",
+    "category": "single_turn_data_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天各品类销售额是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "category_gmv"
+      ],
+      "dimension_ids": [
+        "categories.category_name"
+      ]
+    },
+    "required_objects": [
+      "orders",
+      "order_items",
+      "products",
+      "categories"
+    ],
+    "required_fields": [
+      "orders.paid_at",
+      "order_items.item_paid_amount"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_046_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_047",
+    "category": "single_turn_data_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "最近 7 天 GMV 是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "gmv"
+      ]
+    },
+    "required_objects": [
+      "orders",
+      "order_items"
+    ],
+    "required_fields": [
+      "orders.paid_at",
+      "order_items.item_paid_amount"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_047_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_048",
+    "category": "refund_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天退款金额（只统计成功退款）是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "refund_amount"
+      ]
+    },
+    "required_objects": [
+      "refunds"
+    ],
+    "required_fields": [
+      "refunds.refunded_at"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_048_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_049",
+    "category": "metric_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天客单价（GMV 除以支付订单数）是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "average_order_value"
+      ]
+    },
+    "required_objects": [
+      "orders",
+      "order_items"
+    ],
+    "required_fields": [
+      "orders.paid_at",
+      "order_items.item_paid_amount"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_049_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  },
+  {
+    "case_id": "eval_050",
+    "category": "single_turn_data_query",
+    "user_id": "u_demo_user",
+    "messages": [
+      {
+        "role": "user",
+        "content": "昨天品类 GMV 是多少？"
+      }
+    ],
+    "golden_task_frame": {
+      "intent": "DATA_QUERY",
+      "metric_ids": [
+        "category_gmv"
+      ],
+      "dimension_ids": [
+        "categories.category_name"
+      ]
+    },
+    "required_objects": [
+      "orders",
+      "order_items",
+      "products",
+      "categories"
+    ],
+    "required_fields": [
+      "orders.paid_at",
+      "order_items.item_paid_amount"
+    ],
+    "expected_action_sequence": [
+      "RETRIEVE",
+      "GENERATE",
+      "EXECUTE",
+      "RESPOND"
+    ],
+    "golden_result_ref": "eval_050_result.json",
+    "should_clarify": false,
+    "should_reject": false,
+    "budgets": {
+      "max_steps": 6,
+      "max_retrieval_rounds": 2,
+      "max_seconds": 30
+    },
+    "data_version": "seed_v1",
+    "catalog_version": "catalog_v1",
+    "result_compare": {
+      "row_order": "explicit",
+      "numeric_abs_tolerance": 0.01,
+      "numeric_rel_tolerance": 0.0001,
+      "null_equals_zero": false
+    },
+    "schema_version": "eval_case_v1"
+  }
+]

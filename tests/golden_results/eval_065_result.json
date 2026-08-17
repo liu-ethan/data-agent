@@ -1,1 +1,7 @@
-{"type":"FIELD_LIST","row_order":"explicit"}
+{
+  "columns": [
+    "gmv",
+    "paid_order_count",
+    "average_order_value"
+  ]
+}

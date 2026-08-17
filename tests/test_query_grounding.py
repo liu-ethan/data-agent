@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from backend.app.errors import RuntimeAgentError
+from backend.app.graph._query_normalizer import bind_draft_to_context, normalize_query_draft
 from backend.app.graph.state import AnswerDraft, QueryDraft, TaskUnderstanding
 from backend.app.models import (
     CatalogField,
@@ -19,28 +20,70 @@ def grounded_context() -> GroundedContext:
         context_id="ctx_1",
         catalog_version="catalog_v1",
         objects=[
-            CatalogObject(object_id="obj_orders", name="orders", grain="order",
-                          source_id="mysql", domain="commerce", score=1,
-                          permission_policy_version="policy_v1"),
-            CatalogObject(object_id="obj_items", name="order_items", grain="item",
-                          source_id="mysql", domain="commerce", score=1,
-                          permission_policy_version="policy_v1"),
+            CatalogObject(
+                object_id="obj_orders",
+                name="orders",
+                grain="order",
+                source_id="mysql",
+                domain="commerce",
+                score=1,
+                permission_policy_version="policy_v1",
+            ),
+            CatalogObject(
+                object_id="obj_items",
+                name="order_items",
+                grain="item",
+                source_id="mysql",
+                domain="commerce",
+                score=1,
+                permission_policy_version="policy_v1",
+            ),
         ],
         fields=[
-            CatalogField(field_id="field_orders_id", name="orders.order_id",
-                         data_type="bigint", object_id="obj_orders", score=1,
-                         permission_policy_version="policy_v1"),
-            CatalogField(field_id="field_orders_paid", name="orders.paid_at",
-                         data_type="datetime", object_id="obj_orders", score=1,
-                         permission_policy_version="policy_v1"),
-            CatalogField(field_id="field_items_order", name="order_items.order_id",
-                         data_type="bigint", object_id="obj_items", score=1,
-                         permission_policy_version="policy_v1"),
-            CatalogField(field_id="field_items_amount", name="order_items.item_paid_amount",
-                         data_type="decimal", object_id="obj_items", score=1,
-                         permission_policy_version="policy_v1"),
+            CatalogField(
+                field_id="field_orders_id",
+                name="orders.order_id",
+                data_type="bigint",
+                object_id="obj_orders",
+                score=1,
+                permission_policy_version="policy_v1",
+            ),
+            CatalogField(
+                field_id="field_orders_paid",
+                name="orders.paid_at",
+                data_type="datetime",
+                object_id="obj_orders",
+                score=1,
+                permission_policy_version="policy_v1",
+            ),
+            CatalogField(
+                field_id="field_orders_status",
+                name="orders.status",
+                data_type="varchar",
+                object_id="obj_orders",
+                score=1,
+                permission_policy_version="policy_v1",
+            ),
+            CatalogField(
+                field_id="field_items_order",
+                name="order_items.order_id",
+                data_type="bigint",
+                object_id="obj_items",
+                score=1,
+                permission_policy_version="policy_v1",
+            ),
+            CatalogField(
+                field_id="field_items_amount",
+                name="order_items.item_paid_amount",
+                data_type="decimal",
+                object_id="obj_items",
+                score=1,
+                permission_policy_version="policy_v1",
+            ),
         ],
-        metrics=["gmv"], coverage=CoverageStatus.SUFFICIENT, token_count=50,
+        metrics=["gmv"],
+        coverage=CoverageStatus.SUFFICIENT,
+        token_count=50,
         permission_policy_version="policy_v1",
     )
 
@@ -68,15 +111,23 @@ def test_grounded_query_draft_accepts_only_catalog_references():
     GroundingValidator.validate(valid_draft(), grounded_context())
 
 
-@pytest.mark.parametrize("updates,reference_type", [
-    ({"required_object_ids": ["obj_orders", "obj_secret"]}, "object"),
-    ({"metric_refs": ["profit"]}, "metric"),
-    ({"time_field": "orders.deleted_at"}, "field"),
-    ({"candidate_sql": (
-        "SELECT SUM(oi.cost_price) AS gmv FROM orders o JOIN order_items oi "
-        "ON oi.order_id=o.order_id WHERE o.paid_at>=:start LIMIT :max_rows"
-      )}, "SQL column"),
-])
+@pytest.mark.parametrize(
+    "updates,reference_type",
+    [
+        ({"required_object_ids": ["obj_orders", "obj_secret"]}, "object"),
+        ({"metric_refs": ["profit"]}, "metric"),
+        ({"time_field": "orders.deleted_at"}, "field"),
+        (
+            {
+                "candidate_sql": (
+                    "SELECT SUM(oi.cost_price) AS gmv FROM orders o JOIN order_items oi "
+                    "ON oi.order_id=o.order_id WHERE o.paid_at>=:start LIMIT :max_rows"
+                )
+            },
+            "SQL column",
+        ),
+    ],
+)
 def test_ungrounded_references_are_rejected_before_gateway(updates, reference_type):
     with pytest.raises(RuntimeAgentError) as error:
         GroundingValidator.validate(valid_draft(**updates), grounded_context())
@@ -86,16 +137,126 @@ def test_ungrounded_references_are_rejected_before_gateway(updates, reference_ty
 
 def test_query_draft_status_contract_prevents_inconsistent_payloads():
     with pytest.raises(ValidationError):
-        QueryDraft(status="SCHEMA_GAP", candidate_sql="SELECT 1",
-                   missing_concepts=["orders"])
+        QueryDraft(status="SCHEMA_GAP", candidate_sql="SELECT 1", missing_concepts=["orders"])
     with pytest.raises(ValidationError):
         QueryDraft(status="QUERY_PLAN", candidate_sql="SELECT 1")
 
 
 def test_task_understanding_requires_clarification_for_unresolved_concepts():
     with pytest.raises(ValidationError):
-        TaskUnderstanding(task_type="DATA_QUERY", unresolved=["which revenue"],
-                          next_action="RETRIEVE")
+        TaskUnderstanding(
+            task_type="DATA_QUERY", unresolved=["which revenue"], next_action="RETRIEVE"
+        )
+
+
+def test_query_normalizer_maps_aov_and_keeps_catalog_column_aliases():
+    draft = valid_draft(
+        candidate_sql=(
+            "SELECT ROUND(SUM(oi.item_paid_amount) / COUNT(DISTINCT o.order_id), 2) "
+            "AS `客单价` FROM orders o JOIN order_items oi ON oi.order_id=o.order_id "
+            "WHERE o.paid_at>=:start AND o.paid_at<:end LIMIT :max_rows"
+        ),
+        metric_refs=["客单价"],
+        expected_columns=["客单价"],
+    )
+    normalized = normalize_query_draft(draft)
+    assert normalized.metric_refs == ["average_order_value"]
+    assert normalized.expected_columns == ["average_order_value"]
+    assert "AS average_order_value" in normalized.candidate_sql.replace("`", "")
+
+
+def test_query_normalizer_rewrites_required_objects_from_sql_tables():
+    draft = valid_draft(
+        candidate_sql=(
+            "SELECT s.shop_name AS shop_name, SUM(oi.item_paid_amount) AS gmv "
+            "FROM orders o JOIN order_items oi ON oi.order_id=o.order_id "
+            "JOIN shops s ON s.shop_id=o.shop_id "
+            "WHERE o.paid_at>=:start AND o.paid_at<:end "
+            "GROUP BY s.shop_id,s.shop_name LIMIT :max_rows"
+        ),
+        required_object_ids=["obj_orders"],
+        expected_columns=["shop_name", "gmv"],
+        dimension_refs=[],
+    )
+    context = grounded_context()
+    context.objects.append(
+        CatalogObject(
+            object_id="obj_shops",
+            name="shops",
+            grain="shop",
+            source_id="mysql",
+            domain="commerce",
+            score=1,
+            permission_policy_version="policy_v1",
+        )
+    )
+    context.fields.append(
+        CatalogField(
+            field_id="field_shops_name",
+            name="shops.shop_name",
+            data_type="varchar",
+            object_id="obj_shops",
+            score=1,
+            permission_policy_version="policy_v1",
+        )
+    )
+    context.fields.append(
+        CatalogField(
+            field_id="field_shops_id",
+            name="shops.shop_id",
+            data_type="varchar",
+            object_id="obj_shops",
+            score=1,
+            permission_policy_version="policy_v1",
+        )
+    )
+    context.fields.append(
+        CatalogField(
+            field_id="field_orders_shop",
+            name="orders.shop_id",
+            data_type="varchar",
+            object_id="obj_orders",
+            score=1,
+            permission_policy_version="policy_v1",
+        )
+    )
+    context.fields.append(
+        CatalogField(
+            field_id="field_orders_status",
+            name="orders.status",
+            data_type="varchar",
+            object_id="obj_orders",
+            score=1,
+            permission_policy_version="policy_v1",
+        )
+    )
+    normalized = normalize_query_draft(draft, context=context)
+    assert set(normalized.required_object_ids) >= {"obj_orders", "obj_items", "obj_shops"}
+    GroundingValidator.validate(normalized, context)
+
+
+def test_bind_draft_drops_ungrounded_metrics_and_dimensions():
+    draft = valid_draft(
+        candidate_sql=(
+            "SELECT DATE(o.paid_at) AS day, SUM(oi.item_paid_amount) AS gmv "
+            "FROM orders o JOIN order_items oi ON oi.order_id=o.order_id "
+            "WHERE o.status=:status AND o.paid_at>=:start AND o.paid_at<:end "
+            "GROUP BY DATE(o.paid_at) LIMIT :max_rows"
+        ),
+        metric_refs=["gmv", "not_a_metric"],
+        dimension_refs=["day", "orders.paid_at"],
+        expected_columns=["day", "gmv"],
+        parameters={
+            "status": "PAID",
+            "start": "2026-08-16 00:00:00",
+            "end": "2026-08-17 00:00:00",
+            "max_rows": 1000,
+        },
+    )
+    bound = bind_draft_to_context(draft, grounded_context())
+    assert bound.metric_refs == ["gmv"]
+    assert bound.dimension_refs == ["orders.paid_at"]
+    GroundingValidator.validate(bound, grounded_context())
 
 
 def test_answer_contract_requires_result_evidence_and_forbids_extra_fields():

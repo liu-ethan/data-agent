@@ -214,3 +214,12 @@ memory:
       - chart_preference
       - number_format
     require_user_confirmation: true
+
+evaluation:
+  cases_dir: tests/eval_cases
+  reports_dir: reports
+  golden_dir: tests/golden_results
+  time_anchor: "2026-08-16T10:00:00+08:00"
+  data_version: seed_v1
+  catalog_version: catalog_v1
+  random_seed: 0

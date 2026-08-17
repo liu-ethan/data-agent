@@ -65,4 +65,15 @@ def parse_time_range(question: str, timezone_name: str) -> TimeRange:
     else:
         start, end = today - timedelta(days=1), today
 
+    if "本月" in question and "上月" in question:
+        last_month_end = today.replace(day=1)
+        last_month_start = last_month_end - timedelta(days=1)
+        start = last_month_start.replace(day=1)
+        end = anchor
+
     return TimeRange(start=start, end=end, timezone=timezone_name)
+
+
+def has_explicit_time(question: str) -> bool:
+    """True when ``question`` names a relative window the parser understands."""
+    return any(any(keyword in question for keyword in keywords) for keywords, _ in _KEYWORD_RULES)

@@ -119,7 +119,9 @@ class TaskFrame(Contract):
     time_range: TimeRange | None = None
     timezone: str = "Asia/Shanghai"
     explicit_conditions: list[str] = Field(default_factory=list)
-    deliverables: list[Literal["DATA_TABLE", "CSV", "CHART", "TEXT"]] = Field(default_factory=lambda: ["TEXT"])
+    deliverables: list[Literal["DATA_TABLE", "CSV", "CHART", "TEXT"]] = Field(
+        default_factory=lambda: ["TEXT"]
+    )
     mentions: dict[str, list[str]] = Field(default_factory=dict)
     unresolved: list[str] = Field(default_factory=list)
     schema_version: str = "task_frame_v1"
@@ -379,17 +381,15 @@ class AppError(Contract):
 
 class PasswordLoginRequest(Contract):
     account: str = Field(min_length=1, max_length=255)
-    password: str = Field(min_length=1, max_length=1024,
-                          json_schema_extra={"format": "password"})
+    password: str = Field(min_length=1, max_length=1024, json_schema_extra={"format": "password"})
 
 
 class RegisterRequest(Contract):
-    account: str = Field(min_length=3, max_length=64,
-                         pattern=r"^[A-Za-z0-9_.\-]+$")
-    password: str = Field(min_length=10, max_length=128,
-                          json_schema_extra={"format": "password"})
-    confirm_password: str = Field(min_length=10, max_length=128,
-                                  json_schema_extra={"format": "password"})
+    account: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.\-]+$")
+    password: str = Field(min_length=10, max_length=128, json_schema_extra={"format": "password"})
+    confirm_password: str = Field(
+        min_length=10, max_length=128, json_schema_extra={"format": "password"}
+    )
     role: Literal["USER", "ADMIN"]
     invite_code: str = Field(min_length=4, max_length=64)
 
@@ -429,6 +429,18 @@ class ChatRequest(Contract):
     expected_state_version: int | None = Field(default=None, ge=0)
 
 
+class EvaluationEvidence(Contract):
+    intent: str | None = None
+    metric_ids: list[str] = Field(default_factory=list)
+    object_names: list[str] = Field(default_factory=list)
+    field_names: list[str] = Field(default_factory=list)
+    coverage: str | None = None
+    retrieval_rounds: int = 0
+    grounded_context_tokens: int | None = None
+    schema_gap_recovered: bool | None = None
+    schema_version: Literal["evaluation_evidence_v1"] = "evaluation_evidence_v1"
+
+
 class ChatResponse(Contract):
     request_id: str
     thread_id: str
@@ -440,6 +452,7 @@ class ChatResponse(Contract):
     interrupt: Interrupt | None = None
     trace_id: str | None = None
     state_version: int | None = None
+    evidence: EvaluationEvidence | None = None
 
 
 class ModelUsage(Contract):
@@ -451,8 +464,12 @@ class ModelUsage(Contract):
 
 class RuntimeEvent(Contract):
     event: Literal[
-        "run.started", "node.started", "node.completed",
-        "interrupt.created", "run.completed", "run.failed",
+        "run.started",
+        "node.started",
+        "node.completed",
+        "interrupt.created",
+        "run.completed",
+        "run.failed",
         "thread.title_updated",
     ]
     thread_title: str | None = None
@@ -469,6 +486,7 @@ class RuntimeEvent(Contract):
     interrupt: Interrupt | None = None
     state_version: int | None = None
     model_usage: ModelUsage | None = None
+    evidence: EvaluationEvidence | None = None
     schema_version: Literal["runtime_event_v1"] = "runtime_event_v1"
 
 

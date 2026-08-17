@@ -10,9 +10,9 @@ from uuid import uuid4
 
 from ...errors import RuntimeAgentError
 from ...memory import PromptContextBuilder
-from ...models import Action, CoverageStatus
+from ...models import Action, CoverageStatus, SchemaGap
 from .._events import checkpoint_state, emit_event
-from .._query_normalizer import build_query_plan_or_gap, normalize_query_draft
+from .._query_normalizer import bind_draft_to_context, build_query_plan_or_gap
 from ..state import QueryDraft
 
 _DETERMINISTIC_CATEGORY_SQL = (
@@ -36,8 +36,9 @@ _DETERMINISTIC_FLAT_SQL = (
 async def query_generation_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
     state = run["state"]
     started = time.perf_counter()
-    await emit_event(runtime, run, "node.started",
-                     node="query_generation_node", action=Action.GENERATE)
+    await emit_event(
+        runtime, run, "node.started", node="query_generation_node", action=Action.GENERATE
+    )
     context = state.grounded_context
     if not context or state.coverage != CoverageStatus.SUFFICIENT or not state.task_frame:
         raise RuntimeAgentError(
@@ -52,10 +53,9 @@ async def query_generation_node(runtime: Any, run: dict[str, Any]) -> dict[str, 
     if not runtime.llm:
         draft = _deterministic_draft(state)
     else:
-        safe_context = PromptContextBuilder().build(
-            node="query_generation_node", state=state)
+        safe_context = PromptContextBuilder().build(node="query_generation_node", state=state)
         draft, trace = await runtime.llm.structured(
-            system="Generate a single MySQL SELECT QueryPlan only from the provided grounded context. Use named parameters, every mandatory metric filter, half-open time bounds and an explicit LIMIT. Result aliases and expected_columns must be stable lowercase English catalog/metric identifiers such as category_name and gmv, never localized display labels. If evidence is insufficient return SCHEMA_GAP. Never generate DDL/DML or query objects absent from context.",
+            system="Generate a single MySQL SELECT QueryPlan only from the provided grounded context. Use named parameters, every mandatory metric filter, half-open time bounds and an explicit LIMIT. Result aliases and expected_columns must be stable lowercase English catalog/metric identifiers such as category_name and gmv, never localized display labels. Period comparisons must stay one SELECT over the provided time_range; never emit UNION, DDL, DML, or objects absent from context. If evidence is insufficient return SCHEMA_GAP.",
             user=json.dumps(safe_context, ensure_ascii=False),
             schema=QueryDraft,
             purpose="query_generation",
@@ -63,21 +63,44 @@ async def query_generation_node(runtime: Any, run: dict[str, Any]) -> dict[str, 
             prompt_version="query_generation_v1",
         )
         state.model_traces.append(asdict(trace) | {"purpose": "query_generation"})
-        bound_metrics = context.metrics or state.task_frame.metric_ids
-        if bound_metrics:
-            draft = draft.model_copy(update={"metric_refs": bound_metrics})
-        if state.task_frame.dimension_ids:
-            draft = draft.model_copy(
-                update={"dimension_refs": state.task_frame.dimension_ids})
-        draft = normalize_query_draft(draft)
 
-    plan, gap = build_query_plan_or_gap(
-        draft, context=context, task_frame=state.task_frame,
-        permission_policy_version=run["permission"].policy_version,
-        max_rows=runtime.settings.get("runtime_agent", {}).get(
-            "max_rows_per_query", 1000),
-        llm_active=bool(runtime.llm),
-    )
+    try:
+        if runtime.llm:
+            draft = bind_draft_to_context(draft, context, state.task_frame)
+        plan, gap = build_query_plan_or_gap(
+            draft,
+            context=context,
+            task_frame=state.task_frame,
+            permission_policy_version=run["permission"].policy_version,
+            max_rows=runtime.settings.get("runtime_agent", {}).get("max_rows_per_query", 1000),
+            llm_active=bool(runtime.llm),
+        )
+    except RuntimeAgentError as exc:
+        if exc.error_code not in {"QUERY_SPEC_MISMATCH", "SQL_PARSE_ERROR"}:
+            raise
+        plan, gap = (
+            None,
+            SchemaGap(
+                gap_id="gap",
+                missing_concepts=list((exc.details or {}).get("references") or [exc.message]),
+                candidate_object_ids=list(draft.required_object_ids),
+                narrow_query=state.task_frame.question,
+                reason="generated plan was not grounded",
+                retrieval_round=1,
+            ),
+        )
+    except Exception:
+        plan, gap = (
+            None,
+            SchemaGap(
+                gap_id="gap",
+                missing_concepts=["query evidence"],
+                candidate_object_ids=list(draft.required_object_ids),
+                narrow_query=state.task_frame.question,
+                reason="generated plan could not be normalized",
+                retrieval_round=1,
+            ),
+        )
     if plan is not None:
         plan.query_plan_id = f"plan_{uuid4().hex[:16]}"
         plan.query_spec.query_id = f"query_{uuid4().hex[:16]}"
@@ -94,8 +117,11 @@ async def query_generation_node(runtime: Any, run: dict[str, Any]) -> dict[str, 
         state.schema_gap = gap
     await checkpoint_state(runtime, run, "query_generation_node")
     await emit_event(
-        runtime, run, "node.completed",
-        node="query_generation_node", action=Action.GENERATE,
+        runtime,
+        run,
+        "node.completed",
+        node="query_generation_node",
+        action=Action.GENERATE,
         duration_ms=round((time.perf_counter() - started) * 1000, 2),
     )
     return {"state": state, "checkpoint_version": run.get("checkpoint_version", -1)}
@@ -125,6 +151,7 @@ def _deterministic_draft(state) -> QueryDraft:
         time_field="orders.paid_at",
         required_object_ids=(
             ["obj_orders", "obj_order_items", "obj_products", "obj_categories"]
-            if category else ["obj_orders", "obj_order_items"]
+            if category
+            else ["obj_orders", "obj_order_items"]
         ),
     )

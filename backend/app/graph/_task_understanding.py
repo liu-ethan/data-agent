@@ -20,7 +20,7 @@ from ..memory import (
     extract_explicit_conditions,
 )
 from ..models import ArtifactSpec, Intent, PermissionContext, TaskFrame
-from ._time_parser import parse_time_range
+from ._time_parser import has_explicit_time, parse_time_range
 from .state import TaskUnderstanding
 
 if TYPE_CHECKING:
@@ -38,20 +38,31 @@ def _deterministic_fallback(message: str) -> TaskUnderstanding:
     """
     lowered = message.lower()
     is_schema = any(term in lowered for term in ("表结构", "schema")) or any(
-        term in message for term in (
-            "哪些字段", "哪些列", "有哪些字段", "有哪些列", "可用列",
-        ))
+        term in message
+        for term in (
+            "哪些字段",
+            "哪些列",
+            "有哪些字段",
+            "有哪些列",
+            "可用列",
+        )
+    )
     if is_schema:
         return TaskUnderstanding(task_type="SCHEMA_QUERY")
 
     metric = ""
     dimension_ids: list[str] = []
-    if any(term in message for term in ("品类", "类目")) and \
-       any(term in lowered for term in ("gmv", "销售", "成交")):
+    if any(term in message for term in ("客单价", "客单")) or "aov" in lowered:
+        metric = "average_order_value"
+    elif any(term in message for term in ("品类", "类目")) and any(
+        term in lowered for term in ("gmv", "销售", "成交")
+    ):
         metric = "category_gmv"
         dimension_ids = ["categories.category_name"]
     elif any(term in lowered for term in ("gmv", "销售", "成交")):
         metric = "gmv"
+    elif any(term in message for term in ("退款率", "退款比例")):
+        metric = "refund_rate"
     elif any(term in message for term in ("退款",)):
         metric = "refund_amount"
     elif any(term in message for term in ("订单数", "已支付订单")):
@@ -86,14 +97,23 @@ def _prior_artifacts(runtime: "RuntimeGraph", state, permission: PermissionConte
     artifacts: list[ArtifactSpec] = []
     payloads: dict[str, object] = {}
     catalog_version = state.catalog_version or (
-        state.grounded_context.catalog_version if state.grounded_context else None)
-    if not runtime.persistence or not state.artifact_ids or permission is None or not catalog_version:
+        state.grounded_context.catalog_version if state.grounded_context else None
+    )
+    if (
+        not runtime.persistence
+        or not state.artifact_ids
+        or permission is None
+        or not catalog_version
+    ):
         return artifacts, payloads
     for artifact_id in state.artifact_ids:
         try:
             record = runtime.persistence.get_artifact_record(
-                artifact_id, user_id=state.user_id, permission=permission,
-                catalog_version=catalog_version)
+                artifact_id,
+                user_id=state.user_id,
+                permission=permission,
+                catalog_version=catalog_version,
+            )
         except Exception:
             continue
         artifacts.append(ArtifactSpec.model_validate(record["spec"]))
@@ -101,22 +121,28 @@ def _prior_artifacts(runtime: "RuntimeGraph", state, permission: PermissionConte
     return artifacts, payloads
 
 
-async def understand_task(runtime: "RuntimeGraph", state, message: str,
-                          timezone_name: str, *,
-                          permission: PermissionContext | None = None,
-                          preferences: dict | None = None) -> TaskFrame:
+async def understand_task(
+    runtime: "RuntimeGraph",
+    state,
+    message: str,
+    timezone_name: str,
+    *,
+    permission: PermissionContext | None = None,
+    preferences: dict | None = None,
+) -> TaskFrame:
     """Return a ``TaskFrame`` for ``message`` using the LLM or the
     deterministic fallback."""
     artifacts, payloads = _prior_artifacts(runtime, state, permission)
-    resolved = ReferenceResolver().resolve(
-        message, artifacts=artifacts, payloads=payloads)
+    resolved = ReferenceResolver().resolve(message, artifacts=artifacts, payloads=payloads)
     if runtime.llm:
         prompt = PromptContextBuilder().build(node="agent_node", state=state)
-        prompt.update({
-            "question": message,
-            "timezone": timezone_name,
-            "resolved_reference": resolved.model_dump(mode="json"),
-        })
+        prompt.update(
+            {
+                "question": message,
+                "timezone": timezone_name,
+                "resolved_reference": resolved.model_dump(mode="json"),
+            }
+        )
         draft, trace = await runtime.llm.structured(
             system=_TASK_UNDERSTANDING_SYSTEM,
             user=json.dumps(prompt, ensure_ascii=False),
@@ -129,13 +155,31 @@ async def understand_task(runtime: "RuntimeGraph", state, message: str,
     else:
         draft = _deterministic_fallback(message)
 
-    if state.previous_task_frame and \
-       any(term in message for term in ("刚才", "沿用", "继续", "同样", "第一个")):
-        draft.metric_ids = draft.metric_ids or state.previous_task_frame.metric_ids
-        draft.dimension_ids = draft.dimension_ids or state.previous_task_frame.dimension_ids
-        draft.unresolved = [item for item in draft.unresolved
-                            if not any(term in item for term in ("刚才", "沿用",
-                                                               "今天", "今日"))]
+    follow_up = False
+    schema_follow = False
+    if state.previous_task_frame:
+        previous = state.previous_task_frame
+        schema_follow = previous.intent in {Intent.SCHEMA_QUERY, Intent.SCHEMA_LOOKUP} and any(
+            term in message for term in ("字段", "列", "表结构", "schema")
+        )
+        follow_up = any(
+            term in message
+            for term in ("刚才", "沿用", "继续", "同样", "第一个", "呢", "这次", "改成", "再加上")
+        )
+        if schema_follow:
+            draft.task_type = "SCHEMA_QUERY"
+            draft.metric_ids = []
+            draft.unresolved = []
+        elif follow_up:
+            draft.metric_ids = list(dict.fromkeys([*previous.metric_ids, *draft.metric_ids]))
+            draft.dimension_ids = list(
+                dict.fromkeys([*previous.dimension_ids, *draft.dimension_ids])
+            )
+            draft.unresolved = [
+                item
+                for item in draft.unresolved
+                if not any(term in item for term in ("刚才", "沿用", "今天", "今日"))
+            ]
 
     mentions = dict(draft.mentions)
     if resolved.field:
@@ -145,8 +189,15 @@ async def understand_task(runtime: "RuntimeGraph", state, message: str,
     if resolved.clarify and any(term in message for term in ("刚才", "第一个", "上一个")):
         unresolved.append(resolved.clarify)
 
-    intent = Intent.SCHEMA_QUERY if draft.task_type == "SCHEMA_QUERY" \
-        else Intent(draft.task_type)
+    intent = Intent.SCHEMA_QUERY if draft.task_type == "SCHEMA_QUERY" else Intent(draft.task_type)
+    inherit_time = bool(
+        follow_up
+        and not schema_follow
+        and state.previous_task_frame
+        and state.previous_task_frame.time_range
+        and not has_explicit_time(message)
+        and intent not in {Intent.SCHEMA_QUERY, Intent.SCHEMA_LOOKUP, Intent.CHAT_OR_OUT_OF_SCOPE}
+    )
     frame = TaskFrame(
         task_id=f"task_{uuid4().hex[:16]}",
         user_id=state.user_id,
@@ -154,9 +205,15 @@ async def understand_task(runtime: "RuntimeGraph", state, message: str,
         intent=intent,
         metric_ids=draft.metric_ids,
         dimension_ids=draft.dimension_ids,
-        time_range=None if intent in {Intent.SCHEMA_QUERY, Intent.SCHEMA_LOOKUP,
-                                       Intent.CHAT_OR_OUT_OF_SCOPE}
-                  else parse_time_range(message, timezone_name),
+        time_range=(
+            None
+            if intent in {Intent.SCHEMA_QUERY, Intent.SCHEMA_LOOKUP, Intent.CHAT_OR_OUT_OF_SCOPE}
+            else (
+                state.previous_task_frame.time_range
+                if inherit_time
+                else parse_time_range(message, timezone_name)
+            )
+        ),
         timezone=timezone_name,
         explicit_conditions=extract_explicit_conditions(message),
         deliverables=draft.deliverables,

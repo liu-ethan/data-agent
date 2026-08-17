@@ -201,10 +201,10 @@ make test-mysql
 make lint
 
 # 仅运行确定性兼容回归（报告会显式标记为非生产）
-python3.12 scripts/run_evaluation.py --allow-test-double
+make evaluate
 
 # 通过真实鉴权 HTTP、MySQL、Milvus 和模型运行生产评测；令牌由账号登录后提供
-python scripts/run_production_evaluation.py --account u_demo_user --limit 10
+python3.12 scripts/run_production_evaluation.py --account u_demo_user --limit 10
 
 # 运行 70 条真实 Schema Linking / 权限前置检索评测
 make evaluate-rag
@@ -218,6 +218,16 @@ npm run build
 ```
 
 旧的 SQLite/固定规则评测只可用于兼容回归，报告会显式标记为 `non_production`，不再产生或宣传生产 Task Completion Rate、LLM 延迟或 Token 成本。生产评测必须在固定的 MySQL 数据版本、Milvus index 版本和模型版本上通过 API 执行并比较 Golden Result。
+
+评测集现为 92 条可运行任务和 8 条延期 HITL 用例。2026-08-17 生产 HTTP 基线为 Task Completion Rate 55/92；ReadGateway AST 探针 30/30。该完成率还不能写入简历。客单价口径、危险自然语言拒绝、短追问继承、跨月时间窗、检索 rerank 回退和身份跳过分母已按 `reports/failure-improvements.json` 修复，需重新执行 catalog seed / `make collect-catalog` / `make index-catalog` 后跑 `python3.12 scripts/run_production_evaluation.py --account u_demo_user` 才能更新数字。生产消融的 SQL vs TCR 与 GroundedContext token 来自同一 HTTP 报告；BM25/SchemaGap 对照仍标注 `synthetic_catalog`。
+
+尚未用固定评测证明、因此只能写成设计目标或延期的能力：
+
+- Admin 写入、MutationPreview 与审批型 HITL（Spec 06）
+- HITL Resume Success（评测集已占位，`deferred_reason=spec_06_write_gateway`，分母为 0）
+- 任何未写入新的 `reports/production-evaluation.json` 的完成率、时延或 Token 成本
+
+客单价与品类 GMV 已写入 `scripts/catalog_seed.sql`。本地若仍是旧目录，需要重新执行该 seed，并运行 `make collect-catalog` / `make index-catalog`。
 
 ## 配置说明
 
@@ -311,6 +321,7 @@ backend/
     memory/        Checkpoint、Artifact 和记忆实现
     models/        版本化 Pydantic 合约
     ports/         Graph 与基础设施之间的依赖倒置接口
+    evaluation/    评测用例契约、指标、消融和报告
     bootstrap.py   生产依赖组合根
     testing.py     显式确定性测试组合
     testing_adapters/ SQLite 与内存测试替身

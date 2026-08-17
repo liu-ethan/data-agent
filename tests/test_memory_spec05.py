@@ -332,6 +332,39 @@ def test_understand_task_resolves_first_field_and_records_explicit_condition(tmp
     assert not any(item.value == "shop_001" for item in frame.filters)
 
 
+def test_short_follow_up_inherits_metrics_and_schema_intent():
+    from backend.app.graph._time_parser import parse_time_range
+
+    runtime = build_test_runtime()
+    yesterday = parse_time_range("昨天", "Asia/Shanghai")
+    state = AgentState(
+        thread_id="t", request_id="r", user_id="u_demo_user",
+        previous_task_frame=TaskFrame(
+            task_id="task_prev", user_id="u_demo_user",
+            question="昨天 GMV 是多少？", intent=Intent.DATA_QUERY,
+            metric_ids=["gmv"], time_range=yesterday,
+        ),
+    )
+    month = asyncio.run(understand_task(runtime, state, "上月呢", "Asia/Shanghai"))
+    assert month.metric_ids == ["gmv"]
+    assert month.intent == Intent.DATA_QUERY
+    assert month.time_range is not None
+    assert month.time_range.start < yesterday.start
+    added = asyncio.run(understand_task(runtime, state, "再加上退款率", "Asia/Shanghai"))
+    assert added.metric_ids == ["gmv", "refund_rate"]
+    assert added.time_range == yesterday
+    schema_state = AgentState(
+        thread_id="t", request_id="r", user_id="u_demo_user",
+        previous_task_frame=TaskFrame(
+            task_id="task_prev", user_id="u_demo_user",
+            question="orders 表有哪些字段？", intent=Intent.SCHEMA_LOOKUP,
+        ),
+    )
+    field = asyncio.run(understand_task(
+        runtime, schema_state, "支付时间字段是什么？", "Asia/Shanghai"))
+    assert field.intent in {Intent.SCHEMA_LOOKUP, Intent.SCHEMA_QUERY}
+
+
 def test_user_preference_overwrite_is_audited(tmp_path):
     store = RuntimePersistence(url=f"sqlite:///{tmp_path / 'prefs.db'}",
                                create_schema=True)

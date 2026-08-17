@@ -25,9 +25,16 @@ class CoverageEvaluator:
         self.max_retrieval_rounds = max_retrieval_rounds
 
     def evaluate(
-        self, *, task: TaskFrame, objects, fields, metric_ids: list[str],
-        dimension_ids: list[str], required_fields: set[str],
-        schema_gap: SchemaGap | None = None, query: str = "",
+        self,
+        *,
+        task: TaskFrame,
+        objects,
+        fields,
+        metric_ids: list[str],
+        dimension_ids: list[str],
+        required_fields: set[str],
+        schema_gap: SchemaGap | None = None,
+        query: str = "",
     ) -> CoverageResult:
         field_names = {field.name for field in fields}
         missing: list[str] = []
@@ -41,17 +48,25 @@ class CoverageEvaluator:
         missing_required = required_fields - field_names
         if missing_required:
             missing.extend(f"field.{item}" for item in sorted(missing_required))
-        if (task.intent.value == "DATA_QUERY"
-                and not any(field.classification == "BUSINESS_TIME"
-                            for field in fields)):
+        if task.intent.value == "DATA_QUERY" and not any(
+            field.classification == "BUSINESS_TIME" for field in fields
+        ):
             missing.append("time field")
         ambiguous: list[str] = []
-        if (not metric_ids and not dimension_ids and len(objects) > 1
-                and abs(objects[0].score - objects[1].score) < self.ambiguity_gap):
+        if (
+            not metric_ids
+            and not dimension_ids
+            and len(objects) > 1
+            and abs(objects[0].score - objects[1].score) < self.ambiguity_gap
+        ):
             ambiguous.append("business object")
-        status = (CoverageStatus.SUFFICIENT if not missing and not ambiguous
-                  else CoverageStatus.AMBIGUOUS if ambiguous
-                  else CoverageStatus.PARTIAL)
+        status = (
+            CoverageStatus.SUFFICIENT
+            if not missing and not ambiguous
+            else CoverageStatus.AMBIGUOUS
+            if ambiguous
+            else CoverageStatus.PARTIAL
+        )
         gap = None
         if status != CoverageStatus.SUFFICIENT:
             round_number = schema_gap.retrieval_round + 1 if schema_gap else 1
@@ -63,9 +78,15 @@ class CoverageEvaluator:
                 reason="catalog coverage is incomplete or ambiguous",
                 retrieval_round=min(self.max_retrieval_rounds, round_number),
             )
-        covered = [*(f"metric.{item}" for item in metric_ids),
-                   *(f"dimension.{item}" for item in dimension_ids),
-                   *(f"field.{item}" for item in sorted(required_fields & field_names))]
+        covered = [
+            *(f"metric.{item}" for item in metric_ids),
+            *(f"dimension.{item}" for item in dimension_ids),
+            *(f"field.{item}" for item in sorted(required_fields & field_names)),
+        ]
         return CoverageResult(
-            status=status, covered=covered, missing=list(dict.fromkeys(missing)),
-            ambiguous=ambiguous, schema_gap=gap)
+            status=status,
+            covered=covered,
+            missing=list(dict.fromkeys(missing)),
+            ambiguous=ambiguous,
+            schema_gap=gap,
+        )

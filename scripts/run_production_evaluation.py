@@ -7,7 +7,6 @@ import argparse
 import getpass
 import json
 import os
-import statistics
 import sys
 import time
 from datetime import UTC, datetime
@@ -18,19 +17,49 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from backend.app.config import load_settings
+from backend.app.evaluation import (
+    compare_results,
+    load_cases,
+    production_ablations,
+    run_security_probe,
+    score_case,
+    summarize_metrics,
+    write_report,
+)
+from backend.app.evaluation.observe import evidence_from_payload
+from backend.app.evaluation.reproducibility import build_reproducibility
+from backend.app.evaluation.scoring import CaseOutcome
 
-def load_cases(root: Path) -> list[dict[str, Any]]:
-    cases: list[dict[str, Any]] = []
-    for path in sorted(root.glob("*.json")):
-        cases.extend(json.loads(path.read_text(encoding="utf-8")))
-    return cases
+
+def _expected_status(case) -> str:
+    if case.should_clarify:
+        return "WAITING_FOR_USER"
+    if case.should_reject:
+        return "REJECTED"
+    return "SUCCEEDED"
 
 
-def percentile(values: list[float], fraction: float) -> float:
-    if not values:
-        return 0.0
-    ordered = sorted(values)
-    return ordered[min(len(ordered) - 1, int((len(ordered) - 1) * fraction))]
+def _actions(events: list[dict[str, Any]]) -> list[str]:
+    actions = [
+        str(event.get("action"))
+        for event in events
+        if event.get("event") in {"node.started", "node.completed"} and event.get("action")
+    ]
+    condensed: list[str] = []
+    for action in actions:
+        if action and action != "None" and (not condensed or condensed[-1] != action):
+            condensed.append(action)
+    return condensed
+
+
+def _usage(events: list[dict[str, Any]]) -> tuple[int, int]:
+    input_tokens = output_tokens = 0
+    for event in events:
+        usage = event.get("model_usage") or {}
+        input_tokens += int(usage.get("input_tokens") or 0)
+        output_tokens += int(usage.get("output_tokens") or 0)
+    return input_tokens, output_tokens
 
 
 def main() -> int:
@@ -43,102 +72,245 @@ def main() -> int:
     parser.add_argument("--case-id", action="append", default=[])
     parser.add_argument("--account")
     args = parser.parse_args()
+    settings = load_settings()
     token = os.environ.get("DRA_EVAL_TOKEN")
-    local_authenticator = None
     with httpx.Client(base_url=args.base_url, timeout=120, trust_env=False) as client:
         if not token and args.account:
-            response = client.post("/api/auth/login", json={
-                "account": args.account,
-                "password": getpass.getpass("Application password: "),
-            })
-            response.raise_for_status(); token = response.json()["access_token"]
+            response = client.post(
+                "/api/auth/login",
+                json={
+                    "account": args.account,
+                    "password": getpass.getpass("Application password: "),
+                },
+            )
+            response.raise_for_status()
+            token = response.json()["access_token"]
         if not token:
             raise SystemExit("Set DRA_EVAL_TOKEN or provide --account and enter its password.")
         headers = {"Authorization": f"Bearer {token}"}
-        identity = client.get("/api/me", headers=headers); identity.raise_for_status()
+        identity = client.get("/api/me", headers=headers)
+        identity.raise_for_status()
+        authenticated_user = identity.json()["user_id"]
         cases = load_cases(args.cases_dir)
         if args.case_id:
-            cases = [case for case in cases if case["case_id"] in set(args.case_id)]
+            cases = [case for case in cases if case.case_id in set(args.case_id)]
         if args.limit is not None:
             cases = cases[: max(0, args.limit)]
-        outcomes: list[dict[str, Any]] = []
+        outcomes: list[CaseOutcome] = []
         for case in cases:
-            requested_user_id = str(case.get("user_id") or identity.json()["user_id"])
-            if requested_user_id == identity.json()["user_id"]:
-                case_headers = headers
-            elif local_authenticator:
-                # Explicitly local-only: the HTTP server still authenticates
-                # this JWT and its MySQL permission lookup must reject unknown
-                # or inactive identities before Graph execution.
-                case_headers = {"Authorization": "Bearer " + local_authenticator.issue(
-                    requested_user_id, ["USER"], ttl_minutes=5)}
-            else:
-                outcomes.append({
-                    "case_id": case["case_id"], "status": "NOT_RUN_IDENTITY_MISMATCH",
-                    "passed": False, "status_ok": False, "action_ok": False,
-                    "result_ok": False, "actions": [], "observed_columns": [],
-                    "duration_ms": 0, "error_code": "EVAL_IDENTITY_TOKEN_REQUIRED",
-                    "requested_user_id": requested_user_id})
+            expected = _expected_status(case)
+            if case.deferred_reason:
+                outcomes.append(
+                    score_case(
+                        CaseOutcome(
+                            case_id=case.case_id,
+                            category=case.category,
+                            status="NOT_RUN",
+                            expected_status=expected,
+                            action_sequence=[],
+                            expected_action_sequence=list(case.expected_action_sequence),
+                            required_objects=list(case.required_objects),
+                            required_fields=list(case.required_fields),
+                            deferred=True,
+                            data_version=case.data_version,
+                            catalog_version=case.catalog_version,
+                        )
+                    )
+                )
                 continue
-            started = time.perf_counter(); thread_id = None; state_version = None; response_body: dict[str, Any] = {}
-            for index, message in enumerate(case["messages"]):
-                request = {"message": message["content"], "request_id": f"eval_{case['case_id']}_{index}_{int(time.time()*1000)}"}
-                if thread_id:
-                    request |= {"thread_id": thread_id, "expected_state_version": state_version}
-                response = client.post("/api/chat", headers=case_headers, json=request)
-                try:
-                    response_body = response.json()
-                except ValueError:
-                    response_body = {"status": "FAILED", "events": [],
-                                     "error_code": f"HTTP_{response.status_code}_NON_JSON"}
-                if response.status_code >= 400:
-                    response_body["status"] = (
-                        "REJECTED" if response.status_code in {401, 403} else "FAILED")
-                    response_body.setdefault("events", [])
+            if case.user_id != authenticated_user:
+                outcomes.append(
+                    score_case(
+                        CaseOutcome(
+                            case_id=case.case_id,
+                            category=case.category,
+                            status="NOT_RUN_IDENTITY_MISMATCH",
+                            expected_status=expected,
+                            action_sequence=[],
+                            expected_action_sequence=list(case.expected_action_sequence),
+                            required_objects=list(case.required_objects),
+                            required_fields=list(case.required_fields),
+                            error_code="EVAL_IDENTITY_TOKEN_REQUIRED",
+                            last_action="FAIL",
+                            data_version=case.data_version,
+                            catalog_version=case.catalog_version,
+                        )
+                    )
+                )
+                continue
+            started = time.perf_counter()
+            thread_id = None
+            state_version = None
+            body: dict[str, Any] = {}
+            for index, message in enumerate(case.messages):
+                for attempt in range(3):
+                    if (
+                        body.get("status") == "WAITING_FOR_USER"
+                        and body.get("interrupt")
+                        and thread_id
+                    ):
+                        interrupt = body["interrupt"]
+                        response = client.post(
+                            f"/api/threads/{thread_id}/interrupts/{interrupt['interrupt_id']}/resume",
+                            headers=headers,
+                            json={
+                                "answer": message.content,
+                                "client_request_id": f"eval_{case.case_id}_{index}_{int(time.time() * 1000)}",
+                                "expected_state_version": state_version,
+                            },
+                        )
+                    else:
+                        payload = {
+                            "message": message.content,
+                            "request_id": f"eval_{case.case_id}_{index}_{int(time.time() * 1000)}",
+                        }
+                        if thread_id:
+                            payload["thread_id"] = thread_id
+                            payload["expected_state_version"] = state_version
+                        response = client.post("/api/chat", headers=headers, json=payload)
+                    try:
+                        body = response.json()
+                    except ValueError:
+                        body = {
+                            "status": "FAILED",
+                            "events": [],
+                            "error_code": f"HTTP_{response.status_code}_NON_JSON",
+                        }
+                    if body.get("error_code") == "LLM_RATE_LIMITED" and attempt < 2:
+                        time.sleep(2 * (attempt + 1))
+                        continue
                     break
-                thread_id, state_version = response_body["thread_id"], response_body.get("state_version")
-            actions = [event.get("action") for event in response_body.get("events", [])
-                       if event.get("event") == "node.completed" and event.get("action")]
-            condensed = [action for index, action in enumerate(actions) if index == 0 or action != actions[index - 1]]
-            expected = case.get("expected_action_sequence", [])
-            action_ok = all(action in condensed for action in expected)
-            if (case.get("should_reject") and not condensed
-                    and response_body.get("error_code") == "PERMISSION_DENIED"):
-                # Authentication/authorization rejection before Graph is
-                # stronger than the legacy fixture's RETRIEVE expectation.
-                action_ok = True
-            status = response_body.get("status")
-            status_ok = (case.get("should_reject") and status == "REJECTED") or (case.get("should_clarify") and status == "WAITING_FOR_USER") or (not case.get("should_reject") and not case.get("should_clarify") and status == "SUCCEEDED")
-            golden = json.loads((args.golden_dir / case["golden_result_ref"]).read_text(encoding="utf-8"))
-            result_ok = True
-            observed_columns: list[str] = []
-            if golden.get("columns") and response_body.get("result_ids"):
-                page = client.get(f"/api/results/{response_body['result_ids'][-1]}", headers=case_headers); page.raise_for_status()
-                rows = page.json().get("rows", []); observed_columns = list(rows[0]) if rows else []
-                result_ok = set(golden["columns"]) == set(observed_columns)
-            elif golden.get("type"):
-                artifact_types = []
-                for artifact_id in response_body.get("artifact_ids", []):
-                    artifact = client.get(f"/api/artifacts/{artifact_id}", headers=case_headers)
-                    if artifact.status_code == 200: artifact_types.append(artifact.json()["spec"]["type"])
-                result_ok = golden["type"] in artifact_types
-            duration_ms = round((time.perf_counter() - started) * 1000, 2)
-            failure_events = [event for event in response_body.get("events", [])
-                              if event.get("event") == "run.failed"]
-            error_code = response_body.get("error_code") or (
-                failure_events[-1].get("error_code") if failure_events else None)
-            outcomes.append({"case_id": case["case_id"], "status": status, "passed": bool(status_ok and action_ok and result_ok), "status_ok": bool(status_ok), "action_ok": action_ok, "result_ok": result_ok, "actions": condensed, "observed_columns": observed_columns, "duration_ms": duration_ms, "error_code": error_code, "requested_user_id": requested_user_id})
-    durations = [item["duration_ms"] for item in outcomes]
-    report = {"mode": "production_http", "generated_at": datetime.now(UTC).isoformat(),
-        "base_url": args.base_url, "authenticated_user_id": identity.json()["user_id"],
-        "case_count": len(outcomes), "passed": sum(item["passed"] for item in outcomes),
-        "task_completion_rate": sum(item["passed"] for item in outcomes) / len(outcomes) if outcomes else 0,
-        "latency_ms": {"mean": round(statistics.mean(durations), 2) if durations else 0, "p95": percentile(durations, .95)},
-        "outcomes": outcomes}
+                if response.status_code >= 400:
+                    body["status"] = "REJECTED" if response.status_code in {401, 403} else "FAILED"
+                    body.setdefault("events", [])
+                    break
+                thread_id = body.get("thread_id") or thread_id
+                state_version = body.get("state_version")
+            latency = round((time.perf_counter() - started) * 1000, 2)
+            events = list(body.get("events") or [])
+            actions = _actions(events)
+            golden = json.loads(
+                (args.golden_dir / case.golden_result_ref).read_text(encoding="utf-8")
+            )
+            columns: list[str] = []
+            rows: list[dict[str, Any]] = []
+            artifact_types: list[str] = []
+            if body.get("result_ids"):
+                page = client.get(f"/api/results/{body['result_ids'][-1]}", headers=headers)
+                if page.status_code == 200:
+                    rows = list(page.json().get("rows") or [])
+                    columns = list(rows[0]) if rows else []
+            for artifact_id in body.get("artifact_ids") or []:
+                artifact = client.get(f"/api/artifacts/{artifact_id}", headers=headers)
+                if artifact.status_code == 200:
+                    artifact_types.append(artifact.json()["spec"]["type"])
+            result_ok = compare_results(
+                golden,
+                observed_columns=columns,
+                observed_rows=rows,
+                spec=case.result_compare,
+                artifact_types=artifact_types,
+            )
+            if case.should_reject:
+                result_ok = body.get("status") == "REJECTED"
+            elif golden.get("status"):
+                result_ok = body.get("status") == golden["status"]
+            sql_ok = (not golden.get("columns")) or set(golden.get("columns") or []) == set(columns)
+            failure_events = [event for event in events if event.get("event") == "run.failed"]
+            error_code = body.get("error_code") or (
+                failure_events[-1].get("error_code") if failure_events else None
+            )
+            input_tokens, output_tokens = _usage(events)
+            seen = evidence_from_payload(body)
+            outcomes.append(
+                score_case(
+                    CaseOutcome(
+                        case_id=case.case_id,
+                        category=case.category,
+                        status=str(body.get("status") or "FAILED"),
+                        expected_status=expected,
+                        action_sequence=actions,
+                        expected_action_sequence=list(case.expected_action_sequence),
+                        observed_intent=seen.get("intent"),
+                        expected_intent=case.golden_task_frame.intent.value,
+                        observed_metric_ids=list(seen.get("metric_ids") or []),
+                        expected_metric_ids=list(case.golden_task_frame.metric_ids),
+                        observed_objects=list(seen.get("objects") or []),
+                        required_objects=list(case.required_objects),
+                        observed_fields=list(seen.get("fields") or []),
+                        required_fields=list(case.required_fields),
+                        observed_columns=columns,
+                        observed_rows=rows,
+                        artifact_types=artifact_types,
+                        coverage=seen.get("coverage"),
+                        schema_gap_recovered=seen.get("schema_gap_recovered"),
+                        retrieval_rounds=int(seen.get("retrieval_rounds") or 0),
+                        graph_steps=len(actions),
+                        grounded_context_tokens=seen.get("grounded_tokens"),
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        latency_ms=latency,
+                        error_code=error_code,
+                        last_action=actions[-1] if actions else str(body.get("status")),
+                        result_ok=result_ok,
+                        sql_execution_accurate=sql_ok,
+                        data_version=case.data_version,
+                        catalog_version=case.catalog_version,
+                    )
+                )
+            )
+    metrics = summarize_metrics(
+        outcomes, filter_note="production HTTP runnable cases; deferred spec 06 HITL excluded"
+    )
+    failures = [
+        item.failure_record() for item in outcomes if not item.deferred and not item.completed
+    ]
+    for item in failures:
+        item["reproduce_command"] = (
+            "python3.12 scripts/run_production_evaluation.py "
+            f"--account {args.account or authenticated_user} --case-id {item['case_id']}"
+        )
+    report = {
+        "evaluation_mode": "production_runtime",
+        "non_production": False,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "base_url": args.base_url,
+        "authenticated_user_id": authenticated_user,
+        "case_count": len(outcomes),
+        "metrics": metrics,
+        "security_probe": run_security_probe(),
+        "ablations": production_ablations(outcomes),
+        "cases": [item.as_row() for item in outcomes],
+        "failure_cases": failures[:8],
+        "trace_samples": [
+            {"case_id": item.case_id, "action_sequence": item.action_sequence}
+            for item in outcomes
+            if not item.deferred
+        ][:5],
+        "reproducibility": build_reproducibility(
+            command="python3.12 scripts/run_production_evaluation.py --account u_demo_user",
+            execution_mode="production_runtime",
+            data_version="seed_v1",
+            catalog_version="catalog_v1",
+            settings=settings.raw,
+        ),
+    }
+    tcr = next(item for item in metrics if item["name"] == "task_completion_rate")
+    report["task_completion_rate"] = tcr["value"]
+    report["passed"] = tcr["numerator"]
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"evaluated {len(outcomes)} production HTTP cases; passed={report['passed']}; report={args.report}")
-    return 0 if report["passed"] == len(outcomes) else 1
+    write_report(report, args.report.parent, stem=args.report.stem)
+    print(
+        f"evaluated {len(outcomes)} production HTTP cases; "
+        f"passed={report['passed']}; report={args.report}"
+    )
+    runnable = [item for item in outcomes if not item.deferred]
+    return (
+        0
+        if runnable
+        and all(item.completed or item.status.startswith("NOT_RUN") for item in runnable)
+        else 1
+    )
 
 
 if __name__ == "__main__":

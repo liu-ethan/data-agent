@@ -37,6 +37,7 @@ from ..ports import (
 )
 from ..services.trace import record
 from ._events import checkpoint_state, emit_event
+from ._evidence import build_evaluation_evidence, evidence_payload
 from ._thread_title import maybe_generate_thread_title
 from .nodes import (
     agent_node,
@@ -65,10 +66,15 @@ EventSink = Callable[[dict[str, Any]], Awaitable[None] | None]
 class RuntimeGraph:
     """Five top-level LangGraph nodes with deterministic safety routing."""
 
-    def __init__(self, *, retrieval: CatalogRetrievalPort, gateway: ReadGatewayPort,
-                 settings: dict[str, Any] | None = None,
-                 llm: StructuredLLMPort | None = None,
-                 persistence: RuntimeStateStorePort | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        retrieval: CatalogRetrievalPort,
+        gateway: ReadGatewayPort,
+        settings: dict[str, Any] | None = None,
+        llm: StructuredLLMPort | None = None,
+        persistence: RuntimeStateStorePort | None = None,
+    ) -> None:
         self.settings = settings or {}
         self.retrieval = retrieval
         self.gateway = gateway
@@ -93,7 +99,8 @@ class RuntimeGraph:
         graph.add_node("response_node", partial(response_node, self))
         graph.add_edge(START, "agent_node")
         graph.add_conditional_edges(
-            "agent_node", self._route,
+            "agent_node",
+            self._route,
             {
                 "retrieval_node": "retrieval_node",
                 "query_generation_node": "query_generation_node",
@@ -111,9 +118,12 @@ class RuntimeGraph:
     @staticmethod
     def _route(run: _Run) -> str:
         state = run["state"]
-        if (state.status in {RunStatus.WAITING_FOR_USER, RunStatus.FAILED,
-                              RunStatus.REJECTED, RunStatus.TIMEOUT}
-                or state.next_action in {Action.ASK_USER, Action.FAIL, Action.END}):
+        if state.status in {
+            RunStatus.WAITING_FOR_USER,
+            RunStatus.FAILED,
+            RunStatus.REJECTED,
+            RunStatus.TIMEOUT,
+        } or state.next_action in {Action.ASK_USER, Action.FAIL, Action.END}:
             return END
         return {
             Action.RETRIEVE: "retrieval_node",
@@ -126,67 +136,117 @@ class RuntimeGraph:
     # Public entry points
     # ------------------------------------------------------------------
 
-    async def arun(self, *, message: str, user_id: str, permission: PermissionContext,
-                   thread_id: str | None = None, request_id: str | None = None,
-                   timezone_name: str = "Asia/Shanghai",
-                   event_sink: EventSink | None = None,
-                   resume: bool = False,
-                   expected_state_version: int | None = None) -> ChatResponse:
-        thread_id, request_id = (thread_id or f"thread_{uuid4().hex[:16]}",
-                                 request_id or f"req_{uuid4().hex[:16]}")
-        initial = self._open_run(thread_id=thread_id, request_id=request_id,
-                                  user_id=user_id, message=message,
-                                  timezone_name=timezone_name,
-                                  permission=permission, resume=resume,
-                                  expected_state_version=expected_state_version)
+    async def arun(
+        self,
+        *,
+        message: str,
+        user_id: str,
+        permission: PermissionContext,
+        thread_id: str | None = None,
+        request_id: str | None = None,
+        timezone_name: str = "Asia/Shanghai",
+        event_sink: EventSink | None = None,
+        resume: bool = False,
+        expected_state_version: int | None = None,
+    ) -> ChatResponse:
+        thread_id, request_id = (
+            thread_id or f"thread_{uuid4().hex[:16]}",
+            request_id or f"req_{uuid4().hex[:16]}",
+        )
+        initial = self._open_run(
+            thread_id=thread_id,
+            request_id=request_id,
+            user_id=user_id,
+            message=message,
+            timezone_name=timezone_name,
+            permission=permission,
+            resume=resume,
+            expected_state_version=expected_state_version,
+        )
         initial["event_sink"] = event_sink
         if self.persistence:
             await asyncio.to_thread(
-                self.persistence.append_message, thread_id, user_id, "user", message)
+                self.persistence.append_message, thread_id, user_id, "user", message
+            )
         await emit_event(self, initial, "run.started")
         terminal_error_code, model_usage, final, answer = await self._drive(initial)
-        return await self._finalize(initial, final=final, answer=answer,
-                                    request_id=request_id, thread_id=thread_id,
-                                    model_usage=model_usage,
-                                    terminal_error_code=terminal_error_code)
+        return await self._finalize(
+            initial,
+            final=final,
+            answer=answer,
+            request_id=request_id,
+            thread_id=thread_id,
+            model_usage=model_usage,
+            terminal_error_code=terminal_error_code,
+        )
 
-    def run(self, *, message: str, user_id: str, permission: PermissionContext,
-            thread_id: str | None = None, request_id: str | None = None,
-            timezone_name: str = "Asia/Shanghai",
-            event_sink: Callable[[dict[str, Any]], None] | None = None,
-            resume: bool = False,
-            expected_state_version: int | None = None) -> ChatResponse:
+    def run(
+        self,
+        *,
+        message: str,
+        user_id: str,
+        permission: PermissionContext,
+        thread_id: str | None = None,
+        request_id: str | None = None,
+        timezone_name: str = "Asia/Shanghai",
+        event_sink: Callable[[dict[str, Any]], None] | None = None,
+        resume: bool = False,
+        expected_state_version: int | None = None,
+    ) -> ChatResponse:
         """Synchronous adapter retained for unit tests and command-line usage."""
+
         async def sink(item: dict[str, Any]) -> None:
             if event_sink:
                 event_sink(item)
-        return asyncio.run(self.arun(
-            message=message, user_id=user_id, permission=permission,
-            thread_id=thread_id, request_id=request_id,
-            timezone_name=timezone_name, event_sink=sink, resume=resume,
-            expected_state_version=expected_state_version))
+
+        return asyncio.run(
+            self.arun(
+                message=message,
+                user_id=user_id,
+                permission=permission,
+                thread_id=thread_id,
+                request_id=request_id,
+                timezone_name=timezone_name,
+                event_sink=sink,
+                resume=resume,
+                expected_state_version=expected_state_version,
+            )
+        )
 
     # ------------------------------------------------------------------
     # Run lifecycle
     # ------------------------------------------------------------------
 
-    def _open_run(self, *, thread_id: str, request_id: str, user_id: str,
-                  message: str, timezone_name: str, permission: PermissionContext,
-                  resume: bool, expected_state_version: int | None) -> _Run:
+    def _open_run(
+        self,
+        *,
+        thread_id: str,
+        request_id: str,
+        user_id: str,
+        message: str,
+        timezone_name: str,
+        permission: PermissionContext,
+        resume: bool,
+        expected_state_version: int | None,
+    ) -> _Run:
         checkpoint = self.persistence.checkpoint(thread_id) if self.persistence else None
         state = self.persistence.load_state(thread_id) if checkpoint and self.persistence else None
         if state and state.user_id != user_id:
-            raise RuntimeAgentError("PERMISSION_DENIED",
-                                    "thread owner does not match authenticated identity")
+            raise RuntimeAgentError(
+                "PERMISSION_DENIED", "thread owner does not match authenticated identity"
+            )
         if checkpoint and expected_state_version is None:
-            raise RuntimeAgentError("CHECKPOINT_VERSION_REQUIRED",
-                                    "expected_state_version is required for an existing thread")
+            raise RuntimeAgentError(
+                "CHECKPOINT_VERSION_REQUIRED",
+                "expected_state_version is required for an existing thread",
+            )
         if checkpoint and checkpoint.state_version != expected_state_version:
-            raise RuntimeAgentError("CHECKPOINT_CONFLICT",
-                                    "state version has changed")
+            raise RuntimeAgentError("CHECKPOINT_CONFLICT", "state version has changed")
         if state is None:
             state = AgentState(
-                thread_id=thread_id, request_id=request_id, user_id=user_id,
+                thread_id=thread_id,
+                request_id=request_id,
+                user_id=user_id,
                 budgets=self._fresh_budgets(),
             )
         else:
@@ -213,10 +273,11 @@ class RuntimeGraph:
             state.budgets = self._fresh_budgets()
         # Working state carries a bounded prompt window; full history lives
         # in MySQL.
-        state.messages = [*state.messages[-7:],
-                          {"role": "user", "content": message}]
+        state.messages = [*state.messages[-7:], {"role": "user", "content": message}]
         return {
-            "state": state, "message": message, "timezone_name": timezone_name,
+            "state": state,
+            "message": message,
+            "timezone_name": timezone_name,
             "permission": permission,
             "checkpoint_version": checkpoint.state_version if checkpoint else -1,
         }
@@ -238,8 +299,7 @@ class RuntimeGraph:
         try:
             output = await asyncio.wait_for(
                 self._compiled.ainvoke(initial),
-                timeout=float(self.settings.get("runtime_agent", {}).get(
-                    "max_total_seconds", 30)),
+                timeout=float(self.settings.get("runtime_agent", {}).get("max_total_seconds", 30)),
             )
             final = output["state"]
             answer = output.get("final_answer")
@@ -256,10 +316,11 @@ class RuntimeGraph:
             if exc.error_code in {"CHECKPOINT_CONFLICT", "CHECKPOINT_VERSION_REQUIRED"}:
                 raise
             await self._refresh_checkpoint_version(initial, thread_id)
-            state.status = (RunStatus.REJECTED
-                            if exc.error_code in {"PERMISSION_DENIED",
-                                                   "SQL_FORBIDDEN_OPERATION"}
-                            else RunStatus.FAILED)
+            state.status = (
+                RunStatus.REJECTED
+                if exc.error_code in {"PERMISSION_DENIED", "SQL_FORBIDDEN_OPERATION"}
+                else RunStatus.FAILED
+            )
             state.next_action = Action.FAIL
             await checkpoint_state(self, initial, "failure")
             final, answer = state, exc.message
@@ -281,49 +342,70 @@ class RuntimeGraph:
         latest = await asyncio.to_thread(self.persistence.checkpoint, thread_id)
         initial["checkpoint_version"] = latest.state_version if latest else -1
 
-    async def _finalize(self, initial: _Run, *, final: AgentState, answer: str | None,
-                        request_id: str, thread_id: str,
-                        model_usage: dict[str, Any] | None,
-                        terminal_error_code: str | None) -> ChatResponse:
+    async def _finalize(
+        self,
+        initial: _Run,
+        *,
+        final: AgentState,
+        answer: str | None,
+        request_id: str,
+        thread_id: str,
+        model_usage: dict[str, Any] | None,
+        terminal_error_code: str | None,
+    ) -> ChatResponse:
         if final.status == RunStatus.WAITING_FOR_USER:
-            answer = (final.pending_interrupt.question
-                      if final.pending_interrupt else "需要更多信息。")
-        elif (final.status in {RunStatus.FAILED, RunStatus.REJECTED,
-                                  RunStatus.TIMEOUT}
-              and not answer):
+            answer = (
+                final.pending_interrupt.question if final.pending_interrupt else "需要更多信息。"
+            )
+        elif (
+            final.status in {RunStatus.FAILED, RunStatus.REJECTED, RunStatus.TIMEOUT} and not answer
+        ):
             answer = "运行未完成，请根据公开错误码和 trace_id 排查后重试。"
 
         if self.persistence and final.status == RunStatus.SUCCEEDED:
             await asyncio.to_thread(
-                self.persistence.append_message, thread_id, final.user_id,
-                "assistant", answer or "")
-        checkpoint = (self.persistence.checkpoint(thread_id)
-                      if self.persistence else None)
+                self.persistence.append_message, thread_id, final.user_id, "assistant", answer or ""
+            )
+        checkpoint = self.persistence.checkpoint(thread_id) if self.persistence else None
         terminal_run: _Run = {**initial, "state": final}
+        evidence = build_evaluation_evidence(final)
         terminal_payload = {
             "answer": answer,
             "result_ids": list(final.result_ids),
             "artifact_ids": list(final.artifact_ids),
-            "interrupt": (final.pending_interrupt.model_dump(mode="json")
-                          if final.pending_interrupt else None),
+            "interrupt": (
+                final.pending_interrupt.model_dump(mode="json") if final.pending_interrupt else None
+            ),
             "state_version": checkpoint.state_version if checkpoint else None,
             "model_usage": model_usage,
+            "evidence": evidence_payload(final),
         }
         if final.status == RunStatus.SUCCEEDED:
             await emit_event(self, terminal_run, "run.completed", **terminal_payload)
             maybe_generate_thread_title(self, terminal_run, final, answer or "")
-        elif final.status in {RunStatus.FAILED, RunStatus.REJECTED,
-                                RunStatus.TIMEOUT}:
-            await emit_event(self, terminal_run, "run.failed",
-                             error_code=terminal_error_code or "GRAPH_TERMINATED",
-                             **terminal_payload)
-        record("runtime.run_finished", request_id=request_id,
-               status=final.status.value, error_code=terminal_error_code)
+        elif final.status in {RunStatus.FAILED, RunStatus.REJECTED, RunStatus.TIMEOUT}:
+            await emit_event(
+                self,
+                terminal_run,
+                "run.failed",
+                error_code=terminal_error_code or "GRAPH_TERMINATED",
+                **terminal_payload,
+            )
+        record(
+            "runtime.run_finished",
+            request_id=request_id,
+            status=final.status.value,
+            error_code=terminal_error_code,
+        )
         return ChatResponse(
-            request_id=request_id, thread_id=thread_id, status=final.status,
-            answer=answer, result_ids=final.result_ids,
+            request_id=request_id,
+            thread_id=thread_id,
+            status=final.status,
+            answer=answer,
+            result_ids=final.result_ids,
             artifact_ids=final.artifact_ids,
             events=final.action_history,
             interrupt=final.pending_interrupt,
             state_version=checkpoint.state_version if checkpoint else None,
+            evidence=evidence,
         )

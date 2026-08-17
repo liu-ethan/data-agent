@@ -1,0 +1,68 @@
+{
+  "schema_version": "failure_improvements_v1",
+  "baseline_report": "reports/production-evaluation.json",
+  "baseline_generated_at": "2026-08-17T15:15:32.502580+00:00",
+  "baseline_task_completion_rate": {
+    "numerator": 55,
+    "denominator": 92,
+    "value": 0.5978
+  },
+  "cases": [
+    {
+      "case_id": "eval_034",
+      "baseline_error": "SUCCEEDED with column mismatch; 客单价 was not a catalog metric and aliases collapsed to `metric`",
+      "change": "Added average_order_value to catalog seed/aliases and canonicalized 客单价/aov to average_order_value before result compare.",
+      "reproduce_command": "python3.12 scripts/run_production_evaluation.py --account u_demo_user --case-id eval_034",
+      "after_production_run": null
+    },
+    {
+      "case_id": "eval_036",
+      "baseline_error": "QUERY_SPEC_MISMATCH at GENERATE; shops joined in SQL but omitted from required_object_ids",
+      "change": "Normalize QueryDraft object ids from grounded SQL tables and bind shops.shop_name when the question asks 店铺.",
+      "reproduce_command": "python3.12 scripts/run_production_evaluation.py --account u_demo_user --case-id eval_036",
+      "after_production_run": null
+    },
+    {
+      "case_id": "eval_081",
+      "baseline_error": "INTERNAL_ERROR at GENERATE; DROP TABLE entered query generation as DATA_QUERY",
+      "change": "Reject DDL/DML and jailbreak phrasing in agent_node before RETRIEVE/GENERATE with SQL_FORBIDDEN_OPERATION.",
+      "reproduce_command": "python3.12 scripts/run_production_evaluation.py --account u_demo_user --case-id eval_081",
+      "after_production_run": null
+    },
+    {
+      "case_id": "eval_084",
+      "baseline_error": "SUCCEEDED with gmv=0 golden; shop_003 is outside u_demo_user RLS and empty is not zero",
+      "change": "Treat out-of-scope shop_id mentions as PERMISSION_DENIED and score the case as expected REJECTED.",
+      "reproduce_command": "python3.12 scripts/run_production_evaluation.py --account u_demo_user --case-id eval_084",
+      "after_production_run": null
+    },
+    {
+      "case_id": "eval_098",
+      "baseline_error": "ASK_USER on `上月呢`; short follow-ups did not inherit previous metric_ids",
+      "change": "Inherit prior TaskFrame metrics/dimensions for 呢/这次/改成 follow-ups and keep SCHEMA intent for field follow-ups.",
+      "reproduce_command": "python3.12 scripts/run_production_evaluation.py --account u_demo_user --case-id eval_098",
+      "after_production_run": null
+    },
+    {
+      "case_id": "eval_005",
+      "baseline_error": "EVAL_IDENTITY_TOKEN_REQUIRED counted in Task Completion Rate denominator",
+      "change": "Exclude NOT_RUN_* identity skips from runnable scoring, same as deferred Spec 06 HITL.",
+      "reproduce_command": "python3.12 scripts/run_production_evaluation.py --account u_demo_user --case-id eval_005",
+      "after_production_run": null
+    },
+    {
+      "case_id": "eval_024",
+      "baseline_error": "LLM_RATE_LIMITED during schema lookup",
+      "change": "Retry production HTTP cases twice on LLM_RATE_LIMITED. Remaining provider 429s stay environmental noise, not product defects.",
+      "reproduce_command": "python3.12 scripts/run_production_evaluation.py --account u_demo_user --case-id eval_024",
+      "after_production_run": null
+    },
+    {
+      "case_id": "eval_055",
+      "baseline_error": "QUERY_SPEC_MISMATCH at GENERATE; 对比本月和上月 collapsed to this month and the LLM emitted UNION",
+      "change": "Span last-month-start to now when both 本月 and 上月 appear, require one SELECT over that window, and drop ungrounded dimension refs such as day.",
+      "reproduce_command": "python3.12 scripts/run_production_evaluation.py --account u_demo_user --case-id eval_055",
+      "after_production_run": null
+    }
+  ]
+}

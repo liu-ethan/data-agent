@@ -1,1 +1,7 @@
-{"type":"FIELD_LIST","row_order":"explicit"}
+{
+  "columns": [
+    "shop_name",
+    "gmv"
+  ],
+  "numeric_scale": 2
+}
