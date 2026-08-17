@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -108,6 +109,11 @@ class FastEmbedder:
             kwargs = {"model_name": self.model_name}
             if self.cache_dir:
                 kwargs["cache_dir"] = self.cache_dir
+                cached = Path(self.cache_dir) / f"fast-{self.model_name.rsplit('/', 1)[-1]}"
+                if (cached / "model_optimized.onnx").is_file():
+                    # FastEmbed tries HuggingFace first and does not fall back
+                    # on ConnectError. A local Qdrant tarball must win.
+                    kwargs["specific_model_path"] = str(cached)
             try:
                 self._model = TextEmbedding(**kwargs)
             except Exception as exc:

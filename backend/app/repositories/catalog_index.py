@@ -12,7 +12,6 @@ from ..errors import RuntimeAgentError
 from ..services.schema_catalog import IndexManifest, SearchDocument
 from .catalog import MySQLCatalogRepository
 
-
 LAYERS = ("source_domain", "object", "field_entity", "relation")
 
 
@@ -192,8 +191,18 @@ class CatalogIndexBuilder:
                 and active_manifest.embedding_model == model
                 and active_manifest.collections == collections
                 and active_manifest.document_counts == counts):
-            self.index.validate_manifest(active_manifest)
-            return active_manifest
+            try:
+                self.index.validate_manifest(active_manifest)
+                return active_manifest
+            except RuntimeAgentError as exc:
+                if exc.error_code not in {"RAG_INDEX_MISSING", "RAG_INDEX_INVALID"}:
+                    raise
+                # MySQL still points at a digest-identical index, but the
+                # vector store was deleted or drifted. Rebuild in place.
+                active_collections = {
+                    name for name in active_collections
+                    if self.index.client.has_collection(name)
+                }
 
         created: list[str] = []
         dimension = 0

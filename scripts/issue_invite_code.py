@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 import secrets
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 # Ensure the project root is importable when invoked directly.
@@ -90,7 +90,7 @@ def main() -> int:
         raise SystemExit("--expires-days must be >= 0")
 
     mysql = _load_config(args.config, args.secret).get("mysql", {})
-    expires_at = (datetime.now(timezone.utc) + timedelta(days=args.expires_days)
+    expires_at = (datetime.now(UTC) + timedelta(days=args.expires_days)
                   if args.expires_days else None)
     persistence = RuntimePersistence(mysql, account_name="migration")
     code = _new_code()

@@ -8,13 +8,14 @@ from typing import Any
 
 from ...errors import RuntimeAgentError
 from ...models import Action, ResultStatus
+from .._events import checkpoint_state, emit_event
 
 
 async def execution_gateway_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
     state = run["state"]
     started = time.perf_counter()
-    await runtime._emit(run, "node.started", node="execution_gateway_node",
-                        action=Action.EXECUTE)
+    await emit_event(runtime, run, "node.started",
+                     node="execution_gateway_node", action=Action.EXECUTE)
     if not state.query_plan:
         raise RuntimeAgentError("QUERY_SPEC_MISMATCH", "query plan is missing")
     observation = await asyncio.to_thread(
@@ -25,9 +26,10 @@ async def execution_gateway_node(runtime: Any, run: dict[str, Any]) -> dict[str,
     state.goal_checklist["query_executed"] = observation.status in {
         ResultStatus.SUCCESS, ResultStatus.EMPTY,
     }
-    await runtime._checkpoint(run, "execution_gateway_node")
-    await runtime._emit(
-        run, "node.completed", node="execution_gateway_node", action=Action.EXECUTE,
+    await checkpoint_state(runtime, run, "execution_gateway_node")
+    await emit_event(
+        runtime, run, "node.completed",
+        node="execution_gateway_node", action=Action.EXECUTE,
         duration_ms=round((time.perf_counter() - started) * 1000, 2),
         error_code=observation.error_code,
     )

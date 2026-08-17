@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, replace
-from typing import Any, Iterable
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -57,7 +58,7 @@ class CatalogSnapshot:
     relations: tuple[SchemaRelation, ...]
     catalog_version: str
 
-    def with_version(self, version: str) -> "CatalogSnapshot":
+    def with_version(self, version: str) -> CatalogSnapshot:
         return replace(self, catalog_version=version)
 
     def canonical_payload(self) -> dict[str, Any]:
@@ -255,7 +256,7 @@ class MySQLSchemaCollector:
     @staticmethod
     def _default_grain(table_name: str) -> str:
         return table_name[:-3] + "y" if table_name.endswith("ies") else (
-            table_name[:-1] if table_name.endswith("s") else table_name)
+            table_name.removesuffix("s"))
 
 
 def token_frequencies(tokens: Iterable[str]) -> dict[str, int]:

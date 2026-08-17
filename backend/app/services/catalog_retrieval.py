@@ -13,11 +13,18 @@ from pydantic import BaseModel
 
 from ..errors import RuntimeAgentError
 from ..models import (
-    CatalogField, CatalogObject, CoverageResult, CoverageStatus, GroundedContext,
-    JoinPath, PermissionContext, SchemaGap, TaskFrame,
+    CatalogField,
+    CatalogObject,
+    CoverageResult,
+    GroundedContext,
+    JoinPath,
+    PermissionContext,
+    SchemaGap,
+    TaskFrame,
 )
 from ..repositories.catalog import MySQLCatalogRepository
 from ..repositories.catalog_index import MilvusCatalogIndex
+from .coverage import CoverageEvaluator
 from .embedding import build_embedder
 
 
@@ -48,6 +55,13 @@ def _fuse(dense: list[dict[str, Any]], lexical: list[dict[str, Any]], *,
     return [item | {"score": round(float(item["score"]) / maximum, 6),
                     "retrieval_method": "+".join(item["methods"])}
             for item in ranked]
+
+
+def _merge_by_id(prior: list, incoming: list, *, key) -> list:
+    merged = {key(item): item for item in prior}
+    for item in incoming:
+        merged[key(item)] = item
+    return list(merged.values())
 
 
 class ContextBudgeter:
@@ -95,6 +109,8 @@ class ContextBudgeter:
             selected_fields.pop(optional_indexes.pop())
             optional_indexes = [index for index, field in enumerate(selected_fields)
                                 if field.name not in required_fields]
+        while _tokens(payload()) > self.max_tokens and len(joins) > 1:
+            joins = joins[:-1]
         if _tokens(payload()) > self.max_tokens:
             raise RuntimeAgentError(
                 "RAG_CONTEXT_BUDGET_EXCEEDED",
@@ -107,6 +123,15 @@ class _RerankResult(BaseModel):
     model_config = {"extra": "forbid"}
     ranking: list[str]
     schema_version: str = "rerank_v1"
+
+
+class PassthroughReranker:
+    """Ablation reranker: keep the permission-filtered order unchanged."""
+
+    async def rerank(self, query: str, objects: list[CatalogObject]) -> tuple[
+            list[str], dict[str, Any]]:
+        return [item.object_id for item in objects], {
+            "purpose": "reranker", "disabled_for_ablation": True}
 
 
 class LLMReranker:
@@ -147,7 +172,7 @@ class ProductionCatalogRetrievalService:
 
     def __init__(
         self, repository: MySQLCatalogRepository, index: MilvusCatalogIndex,
-        embedder: Any, reranker: LLMReranker, *, max_sources: int = 3,
+        embedder: Any, reranker: Any, *, max_sources: int = 3,
         max_objects: int = 5, max_fields: int = 8, max_join_hops: int = 2,
         max_tokens: int = 3000, min_score: float = 0.55,
         ambiguity_gap: float = 0.08, dense_weight: float = 0.6,
@@ -160,11 +185,13 @@ class ProductionCatalogRetrievalService:
         self.ambiguity_gap, self.dense_weight = ambiguity_gap, dense_weight
         self._validated_manifest_id: str | None = None
         self.budgeter = ContextBudgeter(max_tokens, max_fields)
+        self.coverage = CoverageEvaluator(ambiguity_gap=ambiguity_gap)
 
     async def retrieve(
         self, task: TaskFrame, permission: PermissionContext,
         schema_gap: SchemaGap | None = None,
         existing_context_id: str | None = None,
+        existing_context: GroundedContext | None = None,
     ) -> tuple[GroundedContext, CoverageResult]:
         started = time.perf_counter()
         if not permission.allowed_source_ids:
@@ -189,19 +216,28 @@ class ProductionCatalogRetrievalService:
             self._validated_manifest_id = manifest.manifest_id
         embedding = await self.embedder.embed_query(query)
 
-        source_dense = await self._thread(
-            self.index.search, manifest, layer="source_domain", embedding=embedding,
-            source_ids=permission.allowed_source_ids,
-            limit=max(self.max_sources * 2, self.max_sources), kinds=["source"])
-        source_lexical = await self._thread(
-            self.repository.lexical_search, query, permission,
-            max(self.max_sources * 2, self.max_sources), layers=("source_domain",))
-        source_hits = _fuse(
-            source_dense, source_lexical, dense_weight=self.dense_weight,
-            lexical_weight=1 - self.dense_weight, limit=self.max_sources)
-        selected_sources = [str(item["source_id"]) for item in source_hits]
-        if not selected_sources:
-            selected_sources = permission.allowed_source_ids[:self.max_sources]
+        pinned_sources = []
+        if schema_gap and existing_context and existing_context.objects:
+            pinned_sources = list(dict.fromkeys(
+                item.source_id for item in existing_context.objects
+                if item.source_id in permission.allowed_source_ids
+            ))[:self.max_sources]
+        if pinned_sources:
+            selected_sources, source_hits = pinned_sources, []
+        else:
+            source_dense = await self._thread(
+                self.index.search, manifest, layer="source_domain",
+                embedding=embedding, source_ids=permission.allowed_source_ids,
+                limit=max(self.max_sources * 2, self.max_sources), kinds=["source"])
+            source_lexical = await self._thread(
+                self.repository.lexical_search, query, permission,
+                max(self.max_sources * 2, self.max_sources), layers=("source_domain",))
+            source_hits = _fuse(
+                source_dense, source_lexical, dense_weight=self.dense_weight,
+                lexical_weight=1 - self.dense_weight, limit=self.max_sources)
+            selected_sources = [str(item["source_id"]) for item in source_hits]
+            if not selected_sources:
+                selected_sources = permission.allowed_source_ids[:self.max_sources]
         scoped_permission = permission.model_copy(update={
             "allowed_source_ids": selected_sources})
 
@@ -247,6 +283,7 @@ class ProductionCatalogRetrievalService:
             objects[index] = item.model_copy(update={
                 "score": round(min(1, 0.8 * item.score + 0.2 * rerank_score), 6)})
         object_ids = [item.object_id for item in objects[:self.max_objects]]
+        reranked_scores = {item.object_id: item.score for item in objects}
 
         field_dense = await self._thread(
             self.index.search, manifest, layer="field_entity", embedding=embedding,
@@ -267,55 +304,34 @@ class ProductionCatalogRetrievalService:
             field_ids=field_ids)
         hybrid_scores = {str(item["target_id"]): float(item["score"])
                          for item in field_hits}
-        fields = [field.model_copy(update={"score": hybrid_scores.get(
-            field.field_id, field.score)}) for field in fields]
+        objects = [item.model_copy(update={
+            "score": reranked_scores.get(item.object_id, item.score),
+            "index_version": manifest.index_version,
+        }) for item in objects]
+        fields = [field.model_copy(update={
+            "score": hybrid_scores.get(field.field_id, field.score),
+            "index_version": manifest.index_version,
+        }) for field in fields]
+        if schema_gap and existing_context:
+            objects = _merge_by_id(
+                existing_context.objects, objects, key=lambda item: item.object_id
+            )[:self.max_objects]
+            fields = _merge_by_id(
+                existing_context.fields, fields, key=lambda item: item.field_id)
+            joins = _merge_by_id(
+                existing_context.join_paths, joins, key=lambda item: item.join_id)
 
-        field_names = {field.name for field in fields}
-        missing: list[str] = []
-        if not objects:
-            missing.append("authorized schema evidence")
-        if task.intent.value == "DATA_QUERY" and not metric_ids:
-            missing.append("catalog metric binding")
-        missing_dimensions = set(dimension_ids) - field_names
-        if missing_dimensions:
-            missing.extend(f"dimension.{item}" for item in sorted(missing_dimensions))
-        missing_required = required_fields - field_names
-        if missing_required:
-            missing.extend(f"field.{item}" for item in sorted(missing_required))
-        if (task.intent.value == "DATA_QUERY"
-                and not any(field.classification == "BUSINESS_TIME"
-                            for field in fields)):
-            missing.append("time field")
-        ambiguous = []
-        if (not metric_ids and not dimension_ids and len(objects) > 1
-                and abs(objects[0].score - objects[1].score) < self.ambiguity_gap):
-            ambiguous.append("business object")
-
-        status = (CoverageStatus.SUFFICIENT if not missing and not ambiguous
-                  else CoverageStatus.AMBIGUOUS if ambiguous
-                  else CoverageStatus.PARTIAL)
-        try:
-            objects, fields, joins, token_count = self.budgeter.apply(
-                objects=objects, fields=fields, joins=joins, metrics=metric_ids,
-                required_fields=required_fields | set(dimension_ids))
-        except RuntimeAgentError as exc:
-            if exc.error_code != "RAG_CONTEXT_BUDGET_EXCEEDED":
-                raise
-            missing.append("context token budget")
-            status = CoverageStatus.PARTIAL
-            raise
-
-        gap = None
-        if status != CoverageStatus.SUFFICIENT:
-            round_number = schema_gap.retrieval_round + 1 if schema_gap else 1
-            gap = SchemaGap(
-                gap_id=f"gap_{uuid4().hex[:16]}",
-                missing_concepts=list(dict.fromkeys(missing + ambiguous)),
-                candidate_object_ids=[item.object_id for item in objects],
-                narrow_query="; ".join(missing + ambiguous) or query,
-                reason="catalog coverage is incomplete or ambiguous",
-                retrieval_round=min(2, round_number),
-            )
+        objects, fields, joins, token_count = self.budgeter.apply(
+            objects=objects, fields=fields, joins=joins, metrics=metric_ids,
+            required_fields=required_fields | set(dimension_ids))
+        coverage = self.coverage.evaluate(
+            task=task, objects=objects, fields=fields, metric_ids=metric_ids,
+            dimension_ids=dimension_ids, required_fields=required_fields,
+            schema_gap=schema_gap, query=query,
+        )
+        coverage = coverage.model_copy(update={"confidence_notes": [
+            "permission-first MySQL BM25 + Milvus dense + LLM reranker",
+            f"catalog={version}; index={manifest.index_version}"]})
         retrieval_trace = {
             "purpose": "schema_retrieval", "provider": provider,
             "model": model, "embedding_dimension": len(embedding),
@@ -327,24 +343,15 @@ class ProductionCatalogRetrievalService:
             "duration_ms": round((time.perf_counter() - started) * 1000, 2),
         }
         context = GroundedContext(
-            context_id=existing_context_id or f"ctx_{uuid4().hex[:16]}",
+            context_id=(existing_context.context_id if existing_context
+                        else existing_context_id or f"ctx_{uuid4().hex[:16]}"),
             catalog_version=version, objects=objects, fields=fields,
-            metrics=metric_ids, join_paths=joins, coverage=status,
+            metrics=metric_ids, join_paths=joins, coverage=coverage.status,
             token_count=token_count,
             tokenizer_version=self.budgeter.tokenizer_version,
             permission_policy_version=permission.policy_version,
             model_traces=[retrieval_trace, reranker_trace],
         )
-        covered = [*(f"metric.{item}" for item in metric_ids),
-                   *(f"dimension.{item}" for item in dimension_ids),
-                   *(f"field.{item}" for item in sorted(required_fields & field_names))]
-        coverage = CoverageResult(
-            status=status, covered=covered, missing=list(dict.fromkeys(missing)),
-            ambiguous=ambiguous,
-            confidence_notes=[
-                "permission-first MySQL BM25 + Milvus dense + LLM reranker",
-                f"catalog={version}; index={manifest.index_version}"],
-            schema_gap=gap)
         return context, coverage
 
     @staticmethod
@@ -354,6 +361,6 @@ class ProductionCatalogRetrievalService:
 
 
 __all__ = [
-    "ContextBudgeter", "LLMReranker", "ProductionCatalogRetrievalService",
-    "build_embedder",
+    "ContextBudgeter", "LLMReranker", "PassthroughReranker",
+    "ProductionCatalogRetrievalService", "build_embedder",
 ]

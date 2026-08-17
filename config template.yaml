@@ -1,27 +1,28 @@
-# Data Runtime Agent local configuration template.
-# Fill local values here first; production should prefer environment variables
-# or a secret manager for passwords and API keys.
+# Data Runtime Agent configuration template.
+#
+# Copy this file to config.yaml and fill local secrets there:
+#   cp "config template.yaml" config.yaml
+#
+# config.yaml is gitignored. Environment variables override YAML
+# (see backend/app/config.py). Never put real passwords, API keys, or
+# JWT secrets in this template.
+#
+# Database split: see docs/specs/01-domain-catalog-and-data.md §11.
 
 app:
   name: data-runtime-agent
   environment: local
   timezone: Asia/Shanghai
-  api_base_url: http://localhost:8000
-  frontend_base_url: http://localhost:5173
   cors_origins:
     - http://localhost:5173
     - http://127.0.0.1:5173
-    - http://192.168.1.120:5173
-    - http://172.17.0.1:5173
-    - http://172.18.0.1:5173
-  request_timeout_seconds: 70
 
 server:
-  host: 0.0.0.0
-  port: 8000
-  # Milvus Lite owns an exclusive file lock, so local runtime uses one process.
-  reload: false
-  workers: 1
+  cors:
+    allowed_methods: [GET, POST, OPTIONS]
+    allowed_headers: [Authorization, Content-Type, X-Request-ID, Last-Event-ID]
+    allow_credentials: false
+    max_age_seconds: 600
 
 auth:
   jwt:
@@ -34,7 +35,11 @@ auth:
 mysql:
   host: localhost
   port: 3306
-  database: data_agent
+  # Two databases serve different roles. The business database is the
+  # read-only gateway target; the system database owns the application
+  # control plane. They never share an account's permissions at runtime.
+  business_database: data_agent_ecommerce
+  system_database: data_agent_system
   charset: utf8mb4
   pool_size: 10
   max_overflow: 20
@@ -42,22 +47,22 @@ mysql:
   accounts:
     migration:
       username: agent_migration
-      password: "CHANGE_ME_MYSQL_PASSWORD"
+      password: CHANGE_ME_MYSQL_PASSWORD
     control:
       username: agent_control
-      password: "CHANGE_ME_MYSQL_PASSWORD"
+      password: CHANGE_ME_MYSQL_PASSWORD
     reader:
       username: agent_reader
-      password: "CHANGE_ME_MYSQL_PASSWORD"
+      password: CHANGE_ME_MYSQL_PASSWORD
     writer:
       username: agent_writer
-      password: "CHANGE_ME_MYSQL_PASSWORD"
+      password: CHANGE_ME_MYSQL_PASSWORD
 
 milvus:
-  # Set true only after Milvus Lite/standalone is reachable and the index has
-  # been built with `python scripts/index_catalog.py`.
-  enabled: false
-  uri: http://localhost:19530
+  # Embedded Milvus Lite. Must be true before `make index-catalog` and before
+  # data queries; the runtime and indexer share this file-backed URI.
+  enabled: true
+  uri: ./data/catalog.milvus.db
   token: ""
   database: default
   collections:
@@ -92,14 +97,9 @@ catalog:
 runtime_agent:
   max_iterations: 6
   max_retrieval_rounds: 2
-  max_read_queries: 3
   max_query_retries: 1
-  max_analysis_calls: 1
-  max_artifacts: 3
-  max_rows_per_query: 1000
   max_total_seconds: 60
-  stop_on_repeated_action: true
-  # Ten questions shown on a fresh session for first-time users.
+  max_rows_per_query: 1000
   recommended_questions:
     - 昨天各品类的 GMV 是多少？
     - 昨天销售额是多少？
@@ -118,17 +118,15 @@ retrieval_budget:
   max_fields_per_object: 8
   max_join_hops: 2
   max_context_tokens: 3000
-  max_retrieval_rounds: 2
   min_rerank_score: 0.55
   ambiguity_score_gap: 0.08
 
-# LLM 配置（MiniMax 推荐 protocol=anthropic；也支持 OpenAI-compatible）
 llm:
-  base_url: https://your-llm-provider/v1
+  # MiniMax example; override with DRA_LLM_BASE_URL / DRA_LLM_API_KEY / DRA_LLM_MODEL.
+  base_url: https://api.minimaxi.com/anthropic
   api_key: CHANGE_ME_LLM_API_KEY
-  model: your-model-name
-  provider: your-provider-name
-  protocol: openai # use anthropic for MiniMax/Anthropic Messages API
+  model: MiniMax-M3
+  protocol: anthropic
   timeout_seconds: 30
   max_retries: 2
   max_schema_repairs: 1
@@ -136,10 +134,6 @@ llm:
   retry_cap_seconds: 5
   trust_env: false
   proxy_url: null
-  embedding:
-    provider: fastembed
-    model: BAAI/bge-small-zh-v1.5
-    cache_dir: .cache/fastembed
   temperature:
     agent: 0.1
     query_generation: 0.0
@@ -152,7 +146,12 @@ llm:
     response: 1200
     summarizer: 800
     reranker: 800
-
+  embedding:
+    provider: fastembed
+    model: BAAI/bge-small-zh-v1.5
+    batch_size: 64
+    cache_dir: .cache/fastembed
+    trust_env: false
 
 read_query:
   max_rows: 1000
@@ -173,32 +172,6 @@ read_query:
     - mysql
     - performance_schema
     - sys
-
-write_gateway:
-  enabled: false
-  allowed_roles:
-    - ADMIN
-  allowed_operations:
-    - INSERT
-    - UPDATE
-  forbidden_operations:
-    - DELETE
-    - CREATE
-    - ALTER
-    - DROP
-    - TRUNCATE
-    - RENAME
-    - GRANT
-    - REVOKE
-  max_affected_rows: 1
-  approval_expire_minutes: 15
-  allowed_tables:
-    products:
-      insert: false
-      update_fields:
-        - product_name
-      required_unique_filters:
-        - product_id
 
 permissions:
   default_policy_version: policy_local_v1
@@ -233,14 +206,6 @@ permissions:
         - shop_003
 
 memory:
-  checkpointer:
-    backend: mysql
-    checkpoint_namespace: default
-    optimistic_locking: true
-  short_term:
-    recent_message_limit: 8
-    summary_after_messages: 12
-    artifact_ttl_days: 30
   long_term:
     enabled: true
     allowed_keys:
@@ -249,42 +214,3 @@ memory:
       - chart_preference
       - number_format
     require_user_confirmation: true
-
-artifacts:
-  max_table_rows_preview: 100
-  csv_max_rows: 10000
-  chart:
-    enabled: true
-    allowed_types:
-      - line
-      - bar
-      - horizontal_bar
-      - metric_card
-
-observability:
-  trace_enabled: true
-  provider: local
-  langfuse:
-    enabled: false
-    public_key: CHANGE_ME_LANGFUSE_PUBLIC_KEY
-    secret_key: CHANGE_ME_LANGFUSE_SECRET_KEY
-    host: http://localhost:3000
-  log_level: INFO
-  redact_fields:
-    - password
-    - token
-    - secret
-    - jwt
-    - phone
-    - id_card
-
-evaluation:
-  enabled: true
-  cases_dir: tests/eval_cases
-  golden_results_dir: tests/golden_results
-  reports_dir: reports
-  fixed_time_anchor: "2026-08-16T10:00:00+08:00"
-  max_case_seconds: 30
-  output_formats:
-    - json
-    - csv

@@ -4,14 +4,14 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import getpass
 import json
 import os
-from pathlib import Path
 import statistics
 import sys
 import time
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -129,7 +129,7 @@ def main() -> int:
                 failure_events[-1].get("error_code") if failure_events else None)
             outcomes.append({"case_id": case["case_id"], "status": status, "passed": bool(status_ok and action_ok and result_ok), "status_ok": bool(status_ok), "action_ok": action_ok, "result_ok": result_ok, "actions": condensed, "observed_columns": observed_columns, "duration_ms": duration_ms, "error_code": error_code, "requested_user_id": requested_user_id})
     durations = [item["duration_ms"] for item in outcomes]
-    report = {"mode": "production_http", "generated_at": datetime.now(timezone.utc).isoformat(),
+    report = {"mode": "production_http", "generated_at": datetime.now(UTC).isoformat(),
         "base_url": args.base_url, "authenticated_user_id": identity.json()["user_id"],
         "case_count": len(outcomes), "passed": sum(item["passed"] for item in outcomes),
         "task_completion_rate": sum(item["passed"] for item in outcomes) / len(outcomes) if outcomes else 0,

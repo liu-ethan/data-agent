@@ -3,10 +3,13 @@ from __future__ import annotations
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
 
-from backend.app.services.schema_catalog import (
-    MySQLSchemaCollector, classify_field, content_version, lexical_tokens,
-)
 from backend.app.repositories.catalog import MySQLCatalogRepository
+from backend.app.services.schema_catalog import (
+    MySQLSchemaCollector,
+    classify_field,
+    content_version,
+    lexical_tokens,
+)
 
 
 def information_schema_engine():

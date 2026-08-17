@@ -80,7 +80,13 @@ M6 之前不提供写入页面；MutationPreview 和审批 UI 在 WriteGateway �
 
 ### 5.1 请求
 
-前端调用 [Spec 03](./03-runtime-graph.md) 的 `POST /api/chat`、`GET /api/results/{result_id}` 和 [Spec 05](./05-memory-interrupts-and-artifacts.md) 的 resume 接口。
+前端调用：
+
+- `POST /api/chat/stream`：启动一次运行。Body 为 `ChatRequest` JSON，用户消息不得放入 query string。
+- `GET /api/chat/stream`：按 `request_id` 和 `Last-Event-ID` 重连已有运行，不得携带 `message`。
+- `POST /api/chat`：非流式同步结果，供评测脚本使用。
+- `GET /api/results/{result_id}`：分页读取已授权结果。
+- [Spec 05](./05-memory-interrupts-and-artifacts.md) 的 resume 接口。
 
 所有请求使用：
 
@@ -89,6 +95,8 @@ Authorization: Bearer <access_token>
 Content-Type: application/json
 X-Request-ID: <request_id>
 ```
+
+`VITE_API_BASE_URL` 是唯一允许的 API origin 配置；组件内不得硬编码 `localhost:8000`。
 
 ### 5.2 SSE
 
@@ -101,7 +109,7 @@ SSE 事件必须按 `request_id` 和 `thread_id` 归属当前运行：
 - `run.completed`：加载 `result_id` 或 `artifact_id`；
 - `run.failed`：展示可操作的错误信息和重试入口。
 
-SSE 断开时最多自动重连 2 次；重连不得重复发送用户消息。超过次数后显示“连接已中断”和继续查看线程的入口。
+SSE 断开时最多自动重连 2 次。重连只订阅同一 `request_id`，不得把用户消息再次写入 URL 或再 POST 一遍。超过次数后显示“连接已中断”和继续查看线程的入口。
 
 ### 5.3 结果和错误
 
@@ -200,9 +208,27 @@ MVP 使用 `Authorization: Bearer`，因此 `allow_credentials` 为 `false`。�
 
 ## 10. 测试证据
 
-- 组件测试报告；
-- SSE 状态机和重连测试；
-- Playwright 桌面/移动端截图；
-- CORS 预检和 SSE 跨域测试；
-- OpenAPI/SSE 契约检查；
-- 无障碍和 reduced-motion 检查记录。
+仓库内验收以测试为准，不把截图或手工录屏当作合入证据。
+
+- Spec 08 §5/§6/§7/§8 不变量 (`frontend/src/workbench/spec08.test.tsx` 与 `frontend/src/main.test.tsx`)：三栏工作台与证据脊柱、`EMPTY` 不显示为 0、`PERMISSION_DENIED` 不含对象名、SSE 首次 POST 且重连 GET 不带 message、Interrupt 使用稳定 `client_request_id`、证据栏不含 Prompt。
+- SSE 解析与 `Last-Event-ID` 续传 (`frontend/src/client.test.ts`)。
+- Playwright 登录、提问、证据栏、澄清恢复、设置和移动端布局 (`frontend/e2e/workbench.spec.ts`)。
+- CORS 预检、拒绝 origin、Bearer 头、`allow_credentials=false`、SSE `text/event-stream` (`tests/test_frontend_spec08.py`)。
+- OpenAPI 发布 `RuntimeEvent` 与 `POST|GET /api/chat/stream` (`tests/test_api.py`)。
+
+## 11. 模块拆分 (M0/M3/M5 重构后)
+
+| 文件 | 职责 |
+| --- | --- |
+| `frontend/src/workbench/AppShell.tsx` | 顶栏、三栏/抽屉布局、连接状态、用户菜单 |
+| `frontend/src/workbench/ThreadList.tsx` | 会话列表、搜索、新建 |
+| `frontend/src/workbench/ChatComposer.tsx` | 输入、发送、停止 |
+| `frontend/src/workbench/RunEvidenceRail.tsx` | `RETRIEVE -> GENERATE -> EXECUTE -> RESPOND` 公开状态脊柱 |
+| `frontend/src/workbench/ResultTable.tsx` | 分页、当前页排序、空态、CSV |
+| `frontend/src/workbench/ChartRenderer.tsx` | 白名单 ECharts DSL |
+| `frontend/src/workbench/InterruptPanel.tsx` | 澄清候选与 resume |
+| `frontend/src/workbench/TraceDrawer.tsx` | `trace_id` 与公开错误码 |
+| `frontend/src/client.ts` | Bearer、`X-Request-ID`、SSE 解析 |
+| `backend/app/api/app.py` | CORS 中间件、`POST` 启动流、`GET` 重连流 |
+
+M6 之前不提供写入或 MutationPreview 页面。旧 `frontend/src/dashboard/` 两栏聊天布局已删除。

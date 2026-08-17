@@ -25,7 +25,7 @@ dependencies = [
 [project.optional-dependencies]
 sql = ["sqlglot>=25,<30"]
 milvus = ["pymilvus==2.6.14", "milvus==2.3.5"]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5", "mypy>=1.10"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -38,6 +38,49 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+# Minimum baseline; broader rules are re-enabled when their respective
+# spec lands its cleanup. See docs/specs/00-engineering-foundation.md
+# for the spec 00 baseline and docs/specs/03-runtime-graph.md for the
+# graph-typing follow-up.
+select = ["E", "F", "I", "W"]
+ignore = [
+  "E501",  # line length is enforced by the formatter, not the linter
+  # Stylistic multiple-statement rules — the codebase uses compact
+  # if-expressions and short-circuit assignments in places where
+  # splitting would hurt readability. Re-enabled when each spec cleans
+  # up its own module.
+  "E701",
+  "E702",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Scripts are CLI entry points; they keep a shebang without chmod +x so
+# ruff's EXE001 is noise here.
+"scripts/**" = ["EXE001", "T201"]
+# Tests are allowed to use long fixture strings.
+"tests/**" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+ignore_missing_imports = true
+no_implicit_optional = true
+check_untyped_defs = false
+warn_unused_ignores = false
+warn_redundant_casts = false
+# Surface only the errors that block runtime correctness; the broader
+# protocol/RuntimeGraph typing cleanup is tracked under spec 03.
+disable_error_code = ["union-attr", "arg-type", "attr-defined", "assignment", "misc", "truthy-function"]
+
+[[tool.mypy.overrides]]
+module = ["backend.app.testing", "backend.app.testing_adapters.*"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "backend.app.evaluation"
+ignore_errors = true
 
 [tool.setuptools.packages.find]
 include = ["backend*"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from .models import AppError
@@ -10,6 +11,15 @@ from .models import AppError
 class RuntimeAgentError(Exception):
     def __init__(self, error_code: str, message: str, *, retryable: bool = False,
                  details: dict[str, Any] | None = None) -> None:
+        # Spec 00 §6: error codes must come from the registry. The env-var
+        # escape hatch exists for negative tests that intentionally use
+        # unregistered codes; production code paths never set it.
+        if error_code not in ERROR_MESSAGES and not os.environ.get(
+                "DRA_ALLOW_UNREGISTERED_ERROR_CODES"):
+            raise ValueError(
+                f"error_code {error_code!r} is not registered in ERROR_MESSAGES; "
+                f"add it to backend/app/errors.py before using it"
+            )
         super().__init__(message)
         self.error_code = error_code
         self.message = message
@@ -62,4 +72,9 @@ ERROR_MESSAGES = {
     "CHECKPOINT_CONFLICT": "The conversation state changed; please retry from the latest state",
     "INTERRUPT_INVALID": "The interrupt cannot be resumed in its current state",
     "WRITE_FORBIDDEN": "This write operation is not allowed",
+    "INVALID_TIMEZONE": "The requested IANA timezone is not recognized",
+    "CHECKPOINT_VERSION_REQUIRED": "An expected_state_version must be supplied to resume an existing thread",
+    "MEMORY_CONFIRMATION_REQUIRED": "This memory update requires explicit user confirmation",
+    "ACCOUNT_TAKEN": "The requested account is already registered",
+    "BUDGET_EXCEEDED": "The runtime exceeded its configured budget",
 }

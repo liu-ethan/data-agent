@@ -1,10 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from backend.app.models import PermissionContext, QueryPlan, QuerySpec
 from backend.app.testing import build_test_gateway
-
 
 DANGEROUS_SQL = [
     "DROP TABLE orders", "DELETE FROM orders", "UPDATE orders SET status='PAID'", "INSERT INTO orders VALUES (1)",

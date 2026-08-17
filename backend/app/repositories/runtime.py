@@ -11,28 +11,55 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import BigInteger, Column, DateTime, Integer, MetaData, String, Table, Text, UniqueConstraint, and_, create_engine, select, update
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    DateTime,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+    and_,
+    create_engine,
+    select,
+    update,
+)
+from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.engine import Engine, URL
 
 from ..auth import hash_password
 from ..errors import RuntimeAgentError
-from ..models import AgentState, ArtifactSpec, ArtifactType, Checkpoint, PermissionContext, RunStatus
+from ..models import (
+    AgentState,
+    ArtifactSpec,
+    ArtifactType,
+    Checkpoint,
+    PermissionContext,
+)
 
 
-def mysql_url(mysql: dict[str, Any], account_name: str = "control") -> URL:
+def mysql_url(mysql: dict[str, Any], account_name: str = "control", *,
+               database: str | None = None) -> URL:
+    """Build a MySQL URL bound to the requested database.
+
+    Defaults to the system database; callers that need the business
+    database (e.g. the read-only data gateway) pass ``database`` explicitly.
+    """
     account = mysql.get("accounts", {}).get(account_name, {})
+    target = database or mysql.get("system_database") or mysql.get("database")
     return URL.create("mysql+pymysql", username=account.get("username"), password=account.get("password"),
-                      host=mysql.get("host"), port=int(mysql.get("port", 3306)), database=mysql.get("database"),
+                      host=mysql.get("host"), port=int(mysql.get("port", 3306)), database=target,
                       query={"charset": mysql.get("charset", "utf8mb4")})
 
 
 def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 class RuntimePersistence:
@@ -102,6 +129,15 @@ class RuntimePersistence:
             Column("created_at", DateTime(timezone=True), nullable=False),
             Column("updated_at", DateTime(timezone=True), nullable=False),
             UniqueConstraint("user_id", "memory_key", name="uq_user_memory_key"))
+        self.memory_history = Table("user_memory_history", self.metadata,
+            Column("history_id", String(64), primary_key=True),
+            Column("memory_id", String(64), nullable=False, index=True),
+            Column("user_id", String(255), nullable=False, index=True),
+            Column("memory_key", String(64), nullable=False),
+            Column("old_value_json", Text, nullable=True),
+            Column("new_value_json", Text, nullable=False),
+            Column("source", String(32), nullable=False),
+            Column("created_at", DateTime(timezone=True), nullable=False))
         self.invite_codes = Table("invite_codes", self.metadata,
             Column("code", String(64), primary_key=True),
             Column("role_name", String(32), nullable=False),
@@ -140,7 +176,7 @@ class RuntimePersistence:
                         idempotency_key: str | None = None,
                         checkpoint_id: str | None = None) -> Checkpoint:
         key = idempotency_key or f"checkpoint:{state.thread_id}:{state.request_id}:{state.status.value}"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self.engine.begin() as connection:
             existing_idempotent = connection.execute(select(self.idempotency.c.value_json).where(self.idempotency.c.key == key)).scalar_one_or_none()
             if existing_idempotent:
@@ -197,14 +233,16 @@ class RuntimePersistence:
 
     def append_message(self, thread_id: str, user_id: str, role: str, content: str) -> None:
         with self.engine.begin() as connection:
-            connection.execute(self.messages.insert().values(message_id=f"msg_{uuid4().hex[:16]}", thread_id=thread_id, user_id=user_id, role=role, content=content, created_at=datetime.now(timezone.utc)))
+            connection.execute(self.messages.insert().values(message_id=f"msg_{uuid4().hex[:16]}", thread_id=thread_id, user_id=user_id, role=role, content=content, created_at=datetime.now(UTC)))
 
     def append_event(self, request_id: str, owner_user_id: str, event: dict[str, Any]) -> int:
         with self.engine.begin() as connection:
             result = connection.execute(self.events.insert().values(request_id=request_id,
                 owner_user_id=owner_user_id,
-                event_json=json.dumps(event, default=str, ensure_ascii=False), created_at=datetime.now(timezone.utc)))
-            return int(result.inserted_primary_key[0])
+                event_json=json.dumps(event, default=str, ensure_ascii=False), created_at=datetime.now(UTC)))
+            inserted = result.inserted_primary_key
+            assert inserted is not None, "append_event requires an auto-increment primary key"
+            return int(inserted[0])
 
     def events_after(self, request_id: str, owner_user_id: str, after_id: int = 0, limit: int = 100) -> list[tuple[int, dict[str, Any]]]:
         with self.engine.connect() as connection:
@@ -225,7 +263,7 @@ class RuntimePersistence:
         try:
             with self.engine.begin() as connection:
                 connection.execute(self.idempotency.insert().values(key=key, value_json=payload,
-                    created_at=datetime.now(timezone.utc)))
+                    created_at=datetime.now(UTC)))
             return value
         except IntegrityError:
             existing = self.get_idempotent(key)
@@ -238,7 +276,7 @@ class RuntimePersistence:
         return [dict(row) for row in reversed(rows)]
 
     def user_preferences(self, user_id: str) -> dict[str, Any]:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self.engine.connect() as connection:
             rows = connection.execute(select(self.user_memories.c.memory_key,
                 self.user_memories.c.value_json, self.user_memories.c.expires_at)
@@ -251,7 +289,7 @@ class RuntimePersistence:
         if not confirmed:
             raise RuntimeAgentError("MEMORY_CONFIRMATION_REQUIRED",
                                     "long-term preferences require explicit confirmation")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         payload = json.dumps(value, ensure_ascii=False)
         with self.engine.begin() as connection:
             row = connection.execute(select(self.user_memories).where(and_(
@@ -265,6 +303,11 @@ class RuntimePersistence:
                     value_json=payload, source=source, version=version,
                     confirmed_at=now, updated_at=now))
                 memory_id = str(row["memory_id"])
+                connection.execute(self.memory_history.insert().values(
+                    history_id=f"memhist_{uuid4().hex[:16]}",
+                    memory_id=memory_id, user_id=user_id, memory_key=key,
+                    old_value_json=row["value_json"], new_value_json=payload,
+                    source=source, created_at=now))
             else:
                 version, memory_id = 1, f"memory_{uuid4().hex[:16]}"
                 connection.execute(self.user_memories.insert().values(
@@ -274,6 +317,26 @@ class RuntimePersistence:
         return {"memory_id": memory_id, "key": key, "value": value,
                 "source": source, "version": version,
                 "confirmed_at": now.isoformat()}
+
+    def user_memory_history(self, user_id: str, key: str) -> list[dict[str, Any]]:
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(self.memory_history)
+                .where(and_(
+                    self.memory_history.c.user_id == user_id,
+                    self.memory_history.c.memory_key == key))
+                .order_by(self.memory_history.c.created_at)
+            ).mappings().all()
+        history = []
+        for row in rows:
+            history.append({
+                "memory_id": row["memory_id"],
+                "old_value": json.loads(row["old_value_json"]) if row["old_value_json"] else None,
+                "new_value": json.loads(row["new_value_json"]),
+                "source": row["source"],
+                "created_at": _utc(row["created_at"]).isoformat(),
+            })
+        return history
 
     def list_threads(self, user_id: str, limit: int = 50) -> list[dict[str, Any]]:
         with self.engine.connect() as connection:
@@ -312,7 +375,7 @@ class RuntimePersistence:
             "state_version": checkpoint.state_version if checkpoint else None}
 
     def save_result(self, owner_user_id: str, rows: list[dict[str, Any]], *, ttl_days: int = 30) -> str:
-        result_id, now = f"result_{uuid4().hex[:16]}", datetime.now(timezone.utc)
+        result_id, now = f"result_{uuid4().hex[:16]}", datetime.now(UTC)
         with self.engine.begin() as connection:
             connection.execute(self.results.insert().values(result_id=result_id, owner_user_id=owner_user_id, rows_json=json.dumps(rows, default=str, ensure_ascii=False), created_at=now, expires_at=now + timedelta(days=ttl_days)))
         return result_id
@@ -321,12 +384,12 @@ class RuntimePersistence:
         with self.engine.connect() as connection:
             row = connection.execute(select(self.results).where(self.results.c.result_id == result_id)).mappings().first()
         if not row: raise KeyError(result_id)
-        if row["owner_user_id"] != user_id or _utc(row["expires_at"]) <= datetime.now(timezone.utc): raise RuntimeAgentError("PERMISSION_DENIED", "result is not available")
+        if row["owner_user_id"] != user_id or _utc(row["expires_at"]) <= datetime.now(UTC): raise RuntimeAgentError("PERMISSION_DENIED", "result is not available")
         rows = json.loads(row["rows_json"])
         return {"result_id": result_id, "rows": rows[offset:offset + limit], "offset": offset, "limit": limit, "total": len(rows)}
 
     def create_artifact(self, *, owner_user_id: str, conversation_id: str, artifact_type: ArtifactType, payload: Any, permission: PermissionContext, catalog_version: str, source_result_ids: list[str] | None = None, source_ref: str | None = None, ttl_days: int = 30) -> ArtifactSpec:
-        now, artifact_id, payload_ref = datetime.now(timezone.utc), f"artifact_{uuid4().hex[:16]}", f"payload_{uuid4().hex[:16]}"
+        now, artifact_id, payload_ref = datetime.now(UTC), f"artifact_{uuid4().hex[:16]}", f"payload_{uuid4().hex[:16]}"
         spec = ArtifactSpec(artifact_id=artifact_id, conversation_id=conversation_id, owner_user_id=owner_user_id, type=artifact_type, source_result_ids=source_result_ids or [], source_ref=source_ref, permission_policy_version=permission.policy_version, catalog_version=catalog_version, created_at=now, expires_at=now + timedelta(days=ttl_days), payload_ref=payload_ref)
         with self.engine.begin() as connection:
             connection.execute(self.artifacts.insert().values(artifact_id=artifact_id, owner_user_id=owner_user_id, spec_json=spec.model_dump_json(), payload_json=json.dumps(payload, default=str, ensure_ascii=False), expires_at=spec.expires_at))
@@ -337,7 +400,7 @@ class RuntimePersistence:
             row = connection.execute(select(self.artifacts).where(self.artifacts.c.artifact_id == artifact_id)).mappings().first()
         if not row: raise RuntimeAgentError("ARTIFACT_STALE", "artifact is expired or no longer authorized")
         spec = ArtifactSpec.model_validate_json(row["spec_json"])
-        if spec.owner_user_id != user_id or spec.permission_policy_version != permission.policy_version or spec.catalog_version != catalog_version or _utc(spec.expires_at) <= datetime.now(timezone.utc):
+        if spec.owner_user_id != user_id or spec.permission_policy_version != permission.policy_version or spec.catalog_version != catalog_version or _utc(spec.expires_at) <= datetime.now(UTC):
             raise RuntimeAgentError("ARTIFACT_STALE", "artifact is expired or no longer authorized")
         return json.loads(row["payload_json"])
 
@@ -362,7 +425,7 @@ class RuntimePersistence:
 
         Returns the invite row on success, None if the code cannot be consumed.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self.engine.begin() as connection:
             row = connection.execute(select(self.invite_codes)
                 .where(self.invite_codes.c.code == code)).mappings().first()
@@ -391,7 +454,7 @@ class RuntimePersistence:
         Raises ``RuntimeAgentError`` for duplicate accounts; invite consumption
         is the caller's responsibility and must happen before this call.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         password_hash = hash_password(password)
         with self.engine.begin() as connection:
             existing = connection.execute(select(self.app_users.c.user_id)
@@ -404,7 +467,7 @@ class RuntimePersistence:
                 created_at=now, updated_at=now))
 
     def save_thread_title(self, thread_id: str, title: str) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self.engine.begin() as connection:
             connection.execute(self.thread_titles.insert().prefix_with("IGNORE").values(
                 thread_id=thread_id, title=title, generated_at=now))
@@ -422,7 +485,7 @@ class RuntimePersistence:
             connection.execute(self.invite_codes.insert().values(
                 code=code, role_name=role, max_uses=max_uses, used_count=0,
                 policy_version=policy_version, created_by=created_by,
-                created_at=datetime.now(timezone.utc), expires_at=expires_at,
+                created_at=datetime.now(UTC), expires_at=expires_at,
                 active=1))
 
 

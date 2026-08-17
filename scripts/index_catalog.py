@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from pathlib import Path
 import sys
+from pathlib import Path
 
-from sqlalchemy import inspect
+from sqlalchemy import create_engine, inspect
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -16,10 +16,9 @@ from backend.app.config import load_settings
 from backend.app.errors import RuntimeAgentError
 from backend.app.repositories.catalog import MySQLCatalogRepository
 from backend.app.repositories.catalog_index import CatalogIndexBuilder, MilvusCatalogIndex
-from backend.app.repositories.runtime import RuntimePersistence
+from backend.app.repositories.runtime import RuntimePersistence, mysql_url
 from backend.app.services.embedding import build_embedder
 from backend.app.services.schema_catalog import MySQLSchemaCollector
-
 
 BUSINESS_TABLES = [
     "shops", "users", "categories", "products", "orders", "order_items",
@@ -41,8 +40,9 @@ def arguments() -> argparse.Namespace:
 
 def source_config(settings) -> dict:
     configured = settings.raw.get("catalog", {}).get("source", {})
+    business_database = settings.mysql.get("business_database") or settings.mysql.get("database")
     return {
-        "database": settings.mysql.get("database"),
+        "database": business_database,
         "source_id": "mysql_ecommerce_local",
         "name": "Ecommerce MySQL",
         "domain": "ECOMMERCE_TRADE",
@@ -60,7 +60,7 @@ def require_schema_rag_migration(persistence: RuntimePersistence) -> None:
     if missing:
         raise RuntimeAgentError(
             "CATALOG_MIGRATION_REQUIRED",
-            "apply migrations/005_schema_rag.sql before collecting or indexing",
+            "apply migrations/005_system_schema_rag.sql before collecting or indexing",
             details={"missing_tables": missing})
 
 
@@ -81,9 +81,18 @@ async def main() -> int:
     if args.index_only:
         version = repository.version([source["source_id"]])
     else:
-        snapshot = MySQLSchemaCollector(persistence.engine, source).collect()
-        snapshot = repository.synchronize(snapshot)
-        version = snapshot.catalog_version
+        # INFORMATION_SCHEMA introspection targets the business database,
+        # while catalog authority (catalog_objects, catalog_snapshots, etc.)
+        # is persisted in the system database.
+        business_url = mysql_url(settings.mysql, account_name="migration",
+                                 database=source["database"])
+        business_engine = create_engine(business_url, future=True)
+        try:
+            snapshot = MySQLSchemaCollector(business_engine, source).collect()
+            snapshot = repository.synchronize(snapshot)
+            version = snapshot.catalog_version
+        finally:
+            business_engine.dispose()
         print(f"collected source={snapshot.source_id} objects={len(snapshot.objects)} "
               f"fields={len(snapshot.fields)} relations={len(snapshot.relations)} "
               f"catalog_version={version}")

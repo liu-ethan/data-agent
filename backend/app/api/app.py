@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -16,14 +16,27 @@ from ..auth import Principal, password_hash_or_dummy, verify_password
 from ..bootstrap import RuntimeContainer, build_runtime_container
 from ..config import Settings, load_settings
 from ..errors import RuntimeAgentError
-from ..models import (ArtifactRecord, ChatRequest, ChatResponse, IdentityResponse,
-                     PasswordLoginRequest, PreferenceUpdate,
-                     RecommendedQuestionsResponse, RegisterRequest,
-                     RegistrationResponse, ResultPage, ResumeRequest, RuntimeEvent,
-                     ThreadDetail, ThreadListResponse, TokenResponse,
-                     UserPreferences)
-from ..services.trace import new_trace
-
+from ..middleware import TraceMiddleware
+from ..models import (
+    ArtifactRecord,
+    ChatRequest,
+    ChatResponse,
+    IdentityResponse,
+    PasswordLoginRequest,
+    PreferenceUpdate,
+    RecommendedQuestionsResponse,
+    RegisterRequest,
+    RegistrationResponse,
+    ResultPage,
+    ResumeRequest,
+    RuntimeEvent,
+    ThreadDetail,
+    ThreadListResponse,
+    TokenResponse,
+    TraceContext,
+    UserPreferences,
+)
+from ..services.trace import bind_trace, current_trace
 
 _DEFAULT_RECOMMENDED_QUESTIONS = [
     "昨天各品类的 GMV 是多少？",
@@ -48,7 +61,19 @@ def _interrupt_resumable(state: Any, checkpoint: Any, *, user_id: str,
         and state.status.value == "WAITING_FOR_USER"
         and interrupt and interrupt.interrupt_id == interrupt_id
         and interrupt.checkpoint_id == checkpoint.checkpoint_id
-        and interrupt.expires_at > (now or datetime.now(timezone.utc))
+        and interrupt.expires_at > (now or datetime.now(UTC))
+    )
+
+
+def _fallback_trace(request: Request) -> TraceContext:
+    """Synthesize a TraceContext when the middleware is bypassed (e.g. direct unit tests)."""
+    return TraceContext(
+        trace_id=f"trace_{uuid4().hex}",
+        request_id=request.headers.get("X-Request-ID", f"req_{uuid4().hex[:12]}"),
+        thread_id="unknown",
+        user_id="unknown",
+        route=str(request.url.path),
+        started_at=datetime.now(UTC),
     )
 
 
@@ -62,6 +87,9 @@ def create_app(settings: Settings | None = None,
         allow_credentials=bool(cors.get("allow_credentials", False)),
         allow_methods=list(cors.get("allowed_methods", ["GET", "POST", "OPTIONS"])),
         allow_headers=list(cors.get("allowed_headers", ["Authorization", "Content-Type", "X-Request-ID", "Last-Event-ID"])), max_age=int(cors.get("max_age_seconds", 600)))
+    # Registered after CORS so it sits inside the CORS wrapper; per spec 00 §7
+    # every request (including /health) carries a trace_id from the middleware.
+    app.add_middleware(TraceMiddleware)
     authenticator = container.authenticator
     persistence = container.persistence
     permissions = container.permissions
@@ -86,7 +114,7 @@ def create_app(settings: Settings | None = None,
 
     @app.exception_handler(RuntimeAgentError)
     async def runtime_error_handler(request: Request, exc: RuntimeAgentError) -> JSONResponse:
-        trace = new_trace(request.headers.get("X-Request-ID", f"req_{uuid4().hex[:12]}"), "unknown", "unknown", request.url.path)
+        trace = current_trace() or _fallback_trace(request)
         status = 409 if exc.error_code in {"CHECKPOINT_CONFLICT", "CHECKPOINT_VERSION_REQUIRED", "INTERRUPT_INVALID"} else 403 if exc.error_code == "PERMISSION_DENIED" else 400
         return JSONResponse(status_code=status, content=exc.as_model(trace.trace_id).model_dump(mode="json"))
 
@@ -104,11 +132,24 @@ def create_app(settings: Settings | None = None,
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
+        # Spec 00 §8: /health reports service, database and version. The RAG
+        # (Milvus) subsystem is reported under ``capabilities`` but does NOT
+        # flip the top-level ``status`` to ``degraded``: spec 00 §3 allows
+        # Milvus to remain off until spec 04 lands.
         try:
             persistence_ok, mysql_ok = await asyncio.to_thread(persistence.healthcheck), await asyncio.to_thread(gateway.data.healthcheck)
         except Exception:
             persistence_ok, mysql_ok = False, False
-        return {"status": "ok" if persistence_ok and mysql_ok and not rag_error else "degraded", "service": settings.app.name, "version": app.version, "database": {"configured": True, "connected": mysql_ok, "persistence_connected": persistence_ok}, "rag": {"configured": rag_error is None, "error_code": rag_error}, "schema_version": "health_v2"}
+        return {
+            "status": "ok" if persistence_ok and mysql_ok else "degraded",
+            "service": settings.app.name,
+            "version": app.version,
+            "environment": settings.app.environment,
+            "database": {"configured": True, "connected": mysql_ok, "persistence_connected": persistence_ok},
+            "rag": {"configured": rag_error is None, "error_code": rag_error},
+            "capabilities": {"rag": rag_error is None},
+            "schema_version": "health_v3",
+        }
 
     @app.post("/api/auth/login", response_model=TokenResponse)
     async def login(body: PasswordLoginRequest) -> TokenResponse:
@@ -179,27 +220,37 @@ def create_app(settings: Settings | None = None,
     async def chat(body: ChatRequest, request: Request, identity: Principal = Depends(principal)) -> ChatResponse:
         if body.user_id and body.user_id != identity.user_id:
             raise HTTPException(status_code=403, detail="IDENTITY_MISMATCH")
-        context = permission_for(identity); request_id = body.request_id or request.headers.get("X-Request-ID") or f"req_{uuid4().hex[:16]}"; trace = new_trace(request_id, body.thread_id or "pending", identity.user_id, "/api/chat")
+        context = permission_for(identity)
+        request_id = body.request_id or request.headers.get("X-Request-ID") or f"req_{uuid4().hex[:16]}"
+        bind_trace(thread_id=body.thread_id or "pending", user_id=identity.user_id)
         key = f"request-result:{identity.user_id}:{request_id}"
         cached = await asyncio.to_thread(persistence.get_idempotent, key)
         if cached: return ChatResponse.model_validate(cached)
         response = await graph.arun(message=body.message, user_id=identity.user_id, permission=context, thread_id=body.thread_id, request_id=request_id, timezone_name=timezone_for(identity, body.timezone), expected_state_version=body.expected_state_version)
-        response.trace_id = trace.trace_id
+        trace = current_trace()
+        if trace:
+            response.trace_id = trace.trace_id
         stored = await asyncio.to_thread(persistence.put_idempotent, key, response.model_dump(mode="json"))
         return ChatResponse.model_validate(stored)
 
-    @app.get("/api/chat/stream", responses={200: {
+    _stream_docs = {200: {
         "model": RuntimeEvent,
         "content": {"text/event-stream": {
             "schema": {"$ref": "#/components/schemas/RuntimeEvent"}}},
-    }})
-    async def chat_stream(message: str, request: Request, thread_id: str | None = None,
-                          request_id: str | None = None,
-                          expected_state_version: int | None = None,
-                          timezone_name: str | None = Query(None, alias="timezone"),
-                          identity: Principal = Depends(principal)) -> StreamingResponse:
+    }}
+
+    async def _chat_stream(*, identity: Principal, request: Request,
+                           message: str | None, thread_id: str | None,
+                           request_id: str | None,
+                           expected_state_version: int | None,
+                           timezone_name: str | None,
+                           start_run: bool) -> StreamingResponse:
+        if start_run and not (message or "").strip():
+            raise HTTPException(status_code=400, detail="MESSAGE_REQUIRED")
+        if not start_run and not (request_id or request.headers.get("X-Request-ID")):
+            raise HTTPException(status_code=400, detail="STREAM_REQUEST_ID_REQUIRED")
         context = permission_for(identity)
-        if thread_id:
+        if start_run and thread_id:
             checkpoint = await asyncio.to_thread(persistence.checkpoint, thread_id)
             state = await asyncio.to_thread(persistence.load_state, thread_id)
             if not checkpoint or not state:
@@ -214,32 +265,40 @@ def create_app(settings: Settings | None = None,
         run_thread_id = thread_id or f"thread_{uuid4().hex[:16]}"
         result_key = f"request-result:{identity.user_id}:{request_id}"
         run_key = f"{identity.user_id}:{request_id}"
+
         async def worker() -> ChatResponse:
-            trace = new_trace(request_id, run_thread_id, identity.user_id, "/api/chat/stream")
+            bind_trace(thread_id=run_thread_id, user_id=identity.user_id)
+            trace = current_trace()
             try:
-                response = await graph.arun(message=message, user_id=identity.user_id,
+                response = await graph.arun(
+                    message=message or "", user_id=identity.user_id,
                     permission=context, thread_id=run_thread_id, request_id=request_id,
-                    timezone_name=timezone_for(identity, timezone_name), expected_state_version=expected_state_version)
-                response.trace_id = trace.trace_id
+                    timezone_name=timezone_for(identity, timezone_name),
+                    expected_state_version=expected_state_version)
+                if trace:
+                    response.trace_id = trace.trace_id
             except Exception as exc:
                 error_code = (exc.error_code if isinstance(exc, RuntimeAgentError)
                               else "INTERNAL_ERROR")
-                response = ChatResponse(request_id=request_id, thread_id=run_thread_id,
-                    status="FAILED", answer="运行失败，请使用 trace_id 排查。",
-                    trace_id=trace.trace_id)
+                response = ChatResponse(
+                    request_id=request_id, thread_id=run_thread_id, status="FAILED",
+                    answer="运行失败，请使用 trace_id 排查。",
+                    trace_id=trace.trace_id if trace else None)
                 await asyncio.to_thread(
                     persistence.append_event, request_id, identity.user_id,
                     RuntimeEvent(
                         event="run.failed", request_id=request_id,
                         thread_id=run_thread_id, status="FAILED",
-                        error_code=error_code,
-                        answer=response.answer,
+                        error_code=error_code, answer=response.answer,
                     ).model_dump(mode="json"),
                 )
-            stored = await asyncio.to_thread(persistence.put_idempotent, result_key,
-                                             response.model_dump(mode="json"))
+            stored = await asyncio.to_thread(
+                persistence.put_idempotent, result_key, response.model_dump(mode="json"))
             return ChatResponse.model_validate(stored)
-        if not await asyncio.to_thread(persistence.get_idempotent, result_key) and run_key not in active_runs:
+
+        if (start_run
+                and not await asyncio.to_thread(persistence.get_idempotent, result_key)
+                and run_key not in active_runs):
             task = asyncio.create_task(worker(), name=f"runtime:{run_key}")
             active_runs[run_key] = task
             task.add_done_callback(lambda _: active_runs.pop(run_key, None))
@@ -247,19 +306,54 @@ def create_app(settings: Settings | None = None,
             after_id = max(0, int(request.headers.get("Last-Event-ID", "0")))
         except ValueError:
             after_id = 0
+
         async def stream():
             cursor = after_id
             while True:
-                rows = await asyncio.to_thread(persistence.events_after, request_id,
-                                               identity.user_id, cursor, 100)
+                rows = await asyncio.to_thread(
+                    persistence.events_after, request_id, identity.user_id, cursor, 100)
                 for event_id, payload in rows:
                     cursor = event_id
-                    yield f"id: {event_id}\nevent: {payload['event']}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    yield (
+                        f"id: {event_id}\nevent: {payload['event']}\n"
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    )
                 cached = await asyncio.to_thread(persistence.get_idempotent, result_key)
+                running = run_key in active_runs
                 if cached and not rows:
                     return
+                if not start_run and not running and not cached and not rows:
+                    return
                 await asyncio.sleep(0.1)
-        return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+        return StreamingResponse(
+            stream(), media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.post("/api/chat/stream", responses=_stream_docs)
+    async def chat_stream_post(
+            body: ChatRequest, request: Request,
+            identity: Principal = Depends(principal)) -> StreamingResponse:
+        return await _chat_stream(
+            identity=identity, request=request, message=body.message,
+            thread_id=body.thread_id,
+            request_id=body.request_id or request.headers.get("X-Request-ID"),
+            expected_state_version=body.expected_state_version,
+            timezone_name=body.timezone, start_run=True)
+
+    @app.get("/api/chat/stream", responses=_stream_docs)
+    async def chat_stream_get(
+            request: Request, message: str | None = None,
+            thread_id: str | None = None, request_id: str | None = None,
+            expected_state_version: int | None = None,
+            timezone_name: str | None = Query(None, alias="timezone"),
+            identity: Principal = Depends(principal)) -> StreamingResponse:
+        start_run = bool((message or "").strip())
+        return await _chat_stream(
+            identity=identity, request=request, message=message,
+            thread_id=thread_id, request_id=request_id,
+            expected_state_version=expected_state_version,
+            timezone_name=timezone_name, start_run=start_run)
 
     @app.get("/api/results/{result_id}", response_model=ResultPage)
     async def result(result_id: str, offset: int = 0, limit: int = 100, identity: Principal = Depends(principal)) -> ResultPage:

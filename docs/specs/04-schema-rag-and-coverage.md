@@ -96,12 +96,12 @@ M3 使用 `CatalogRetrievalService` 的固定内存实现；M4 才切换到 BM25
 ## 6. 补检规则
 
 - 首次召回和补检复用同一个 `retrieval_node`。
-- 补检输入必须包含 `existing_context_id` 和 `SchemaGap`。
-- 补检不能扩大到全量数据源。
+- 补检输入必须包含 `existing_context_id`、已有 `GroundedContext` 和 `SchemaGap`。
+- 补检不能扩大到全量数据源：跳过 Source 层检索，把 `source_ids` 钉在已有对象的授权 source 上，并与上一轮字段/对象合并。
 - 每个任务最多 2 次召回。
 - 两轮后仍不足，进入 `ASK_USER` 或失败响应。
-- `AMBIGUOUS` 需要候选差距小于 `ambiguity_score_gap` 时进入 `ASK_USER`；差距足够大才可判定为 `SUFFICIENT`。
-- 权限过滤发生在候选进入 Reranker 前；未授权对象不能只在最终输出阶段删除。
+- `AMBIGUOUS` 需要候选差距小于 `ambiguity_score_gap` 时进入 `ASK_USER`；差距足够大才可判定为 `SUFFICIENT`。判定只允许发生在 `CoverageEvaluator`。
+- 权限过滤发生在候选进入 Reranker 前；未授权对象不能只在最终输出阶段删除，也不能出现在 Prompt 或 Trace 中。
 
 ## 7. 上下文预算
 
@@ -131,19 +131,25 @@ Token 预算按最终 JSON 序列化文本计算，使用配置指定的 tokeniz
 
 ## 9. 测试证据
 
-- 100 source、1000 table、约 3 万 field 的合成元数据。
-- 50 到 100 条 Schema Linking 评测。
-- Recall@K、Context Precision、P95 token、P95 latency 报告。
-- 权限过滤测试。
-- SchemaGap 回归测试。
+仓库内验收以测试为准；一次性评测报告由 `make evaluate-rag` 生成，不作为合入证据。
 
-当前实现证据（2026-08-16）：
+- 合成干扰集 TopK 与 Token 上限 (`tests/test_retrieval.py`)。
+- 生产检索权限前置、Embedding 版本校验、Reranker 拒绝未授权 ID (`tests/test_production_retrieval.py`)。
+- Milvus Lite 四层构建、幂等重建、Source 和 Classification 过滤 (`tests/test_milvus_catalog_index.py`)。
+- information_schema 采集与 BM25 归一化 (`tests/test_schema_catalog.py`)。
+- Spec 04 §6/§7/§8 不变量 (`tests/test_schema_rag_spec04.py`)：未授权 source 不进 Reranker/Trace、SchemaGap 补检钉源并保留上一轮字段、CoverageEvaluator、预算先裁 alias 再裁多余 Join、候选携带 catalog/index/permission 版本、关闭 Reranker 仍返回 GroundedContext。
+- 完整 Schema Linking 对照通过 `scripts/evaluate_schema_rag.py`（`--disable-reranker` / `--dense-weight`）重跑，报告写入 `reports/`，不提交仓库。
 
-- `MySQLSchemaCollector` 真实查询 `information_schema.TABLES / COLUMNS / KEY_COLUMN_USAGE`，并对物理 Schema + 人工指标/别名/审核 Join 生成内容哈希版本。
-- `CatalogIndexBuilder` 在 Milvus Lite 中构建 Source/Object/Field/Relation 四层 staging collections，校验 Schema、维度和行数后切换 MySQL active manifest。
-- 本机实测：8 object、41 field、13 physical FK，FastEmbed `BAAI/bge-small-zh-v1.5` 512 维；四层文档数为 1/13/41/17。
-- `tests/test_milvus_catalog_index.py` 使用真实临时 Milvus Lite 验证四层构建、幂等重建、Manifest、维度、Source 和字段 Classification 过滤。
-- 100 source / 1000 table / 30000 field 的合成干扰集仍由 `tests/test_retrieval.py` 校验 TopK 和 3000 Token 上限。
-- 真实生产 HTTP Golden 评测 `reports/task3-production-evaluation.json`：10/10 通过，包含 8 SUCCEEDED、1 WAITING_FOR_USER 和 1 PERMISSION_DENIED。
-- 真实 Schema Linking 评测 `reports/schema-rag-evaluation.json`：70/70 通过；Object Recall@K 1.0、Field Recall@K 1.0、Context Precision 0.327571、P95 context token 2463（上限 3000）、P95 latency 3105.21ms、敏感候选泄漏 0。该报告固定记录 catalog/index/Embedding/Reranker 版本，可用 `make evaluate-rag` 重跑，并可用 `--disable-reranker` 或 `--dense-weight` 生成消融对照。
-- 关闭 Reranker 的同一组消融报告 `reports/schema-rag-evaluation-no-reranker.json` 同样为 70/70、Recall@K 1.0，P95 latency 从 3105.21ms 降至 18.66ms；说明当前 70 条确定性案例不足以体现 Reranker 的质量增益，但真实 Reranker 的延迟成本已被量化，不能据此虚构质量提升。
+## 10. 模块拆分 (M4 重构后)
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `services/catalog_retrieval.py` | ~360 | 生产分层检索编排：权限前置、BM25+dense 融合、补检钉源、Reranker |
+| `services/coverage.py` | ~70 | CoverageEvaluator，唯一 Coverage/SchemaGap 判定 |
+| `services/catalog_baseline.py` | ~310 | M3 固定目录、合成干扰集、本地 hybrid 对照 |
+| `services/embedding.py` | ~150 | FastEmbed / OpenAI-compatible embedding |
+| `services/schema_catalog.py` | ~270 | information_schema 采集、SearchDocument、版本哈希 |
+| `repositories/catalog.py` | ~700 | MySQL 权威目录、BM25、hydrate、manifest |
+| `repositories/catalog_index.py` | ~280 | Milvus 四层索引与 staging builder |
+
+`ContextBudgeter` 和 `PassthroughReranker` 与生产检索同文件，因为它们只被检索编排调用；Coverage 判定独立可测，所以单独成模块。

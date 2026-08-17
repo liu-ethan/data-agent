@@ -98,3 +98,39 @@ def test_real_milvus_lite_build_validates_four_layers_and_searches(tmp_path: Pat
         assert error.value.error_code == "RAG_EMBEDDING_DIMENSION_MISMATCH"
     finally:
         index.close()
+
+
+def test_rebuilds_when_mysql_manifest_is_active_but_milvus_file_is_gone(tmp_path: Path):
+    pytest.importorskip("pymilvus")
+    first_uri = tmp_path / "catalog.db"
+    config = {
+        "enabled": True, "uri": str(first_uri),
+        "collections": {layer: f"test_{layer}" for layer in
+                        ("source_domain", "object", "field_entity", "relation")},
+    }
+    documents = [document(layer) for layer in
+                 ("source_domain", "object", "field_entity", "relation")]
+    repository = FakeRepository(documents)
+    index = MilvusCatalogIndex(config)
+    try:
+        first = asyncio.run(CatalogIndexBuilder(
+            repository, index, FakeEmbedder(), config).build("catalog_test"))
+    finally:
+        index.close()
+
+    replacement = tmp_path / "catalog-rebuilt.db"
+    rebuilt_config = {**config, "uri": str(replacement)}
+    rebuilt = MilvusCatalogIndex(rebuilt_config)
+    try:
+        second = asyncio.run(CatalogIndexBuilder(
+            repository, rebuilt, FakeEmbedder(), rebuilt_config).build("catalog_test"))
+        assert second.catalog_version == first.catalog_version
+        assert second.index_version == first.index_version
+        assert all(rebuilt.client.has_collection(name)
+                   for name in second.collections.values())
+        hits = rebuilt.search(
+            second, layer="object", embedding=[0.9, 0.1, 0.0],
+            source_ids=["source_allowed"], limit=3, kinds=["object"])
+        assert hits[0]["target_id"] == "target_object"
+    finally:
+        rebuilt.close()

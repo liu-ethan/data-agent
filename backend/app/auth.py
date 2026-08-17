@@ -10,14 +10,13 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 import jwt
 from fastapi import HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-
 
 _SCRYPT_N = 1 << 14
 _SCRYPT_R = 8
@@ -95,7 +94,7 @@ class JWTAuthenticator:
         self.scheme = HTTPBearer(auto_error=False)
 
     def issue(self, user_id: str, roles: list[str] | tuple[str, ...], *, ttl_minutes: int | None = None) -> str:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         payload = {
             "sub": user_id,
             "roles": list(roles),

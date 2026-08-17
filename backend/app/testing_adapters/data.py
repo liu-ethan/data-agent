@@ -9,6 +9,7 @@ import threading
 from typing import Any
 from uuid import uuid4
 
+
 class ResultRepository:
     def __init__(self) -> None:
         self._results: dict[str, list[dict[str, Any]]] = {}
@@ -67,6 +68,17 @@ class SQLiteDataRepository:
         """)
 
     def seed(self) -> None:
+        # Order dates are anchored to the runtime clock so the
+        # deterministic eval suite (which queries "昨天") keeps matching
+        # whichever calendar day the seed runs on. Matches the MySQL seed
+        # in scripts/mock_mysql_data.sh.
+        from datetime import datetime, timedelta
+        today = datetime.now()
+        yesterday = today - timedelta(days=1)
+        two_days_ago = today - timedelta(days=2)
+        three_days_ago = today - timedelta(days=3)
+        seven_days_ago = today - timedelta(days=7)
+
         rows = {
             "shops": [("shop_001", "东城数码旗舰店", "CN-EAST", "华东", "ACTIVE"),
                       ("shop_002", "华南生活馆", "CN-SOUTH", "华南地区", "ACTIVE"),
@@ -85,15 +97,21 @@ class SQLiteDataRepository:
                          ("prod_2002", "shop_002", "cat_210", "厨房收纳盒", "ACTIVE"),
                          ("prod_3001", "shop_002", "cat_310", "保湿面霜", "ACTIVE"),
                          ("prod_3002", "shop_002", "cat_310", "修护乳霜", "ACTIVE")],
-            "orders": [("ord_001", "user_001", "shop_001", "PAID", "2026-08-15 09:10:00", 1299, "2026-08-15 08:30:00"),
-                       ("ord_002", "user_002", "shop_001", "PAID", "2026-08-14 11:20:00", 500, "2026-08-14 10:30:00"),
-                       ("ord_003", "user_003", "shop_002", "PAID", "2026-08-15 13:05:00", 780, "2026-08-15 11:30:00"),
-                       ("ord_004", "user_001", "shop_002", "PAID", "2026-08-12 14:10:00", 320, "2026-08-12 13:00:00"),
-                       ("ord_005", "user_004", "shop_001", "PAID", "2026-08-10 10:00:00", 899, "2026-08-10 09:00:00"),
+            "orders": [("ord_001", "user_001", "shop_001", "PAID", yesterday.strftime("%Y-%m-%d ") + "09:10:00", 1299,
+ yesterday.strftime("%Y-%m-%d ") + "08:30:00"),
+                       ("ord_002", "user_002", "shop_001", "PAID", two_days_ago.strftime("%Y-%m-%d ") + "11:20:00", 500,
+ two_days_ago.strftime("%Y-%m-%d ") + "10:30:00"),
+                       ("ord_003", "user_003", "shop_002", "PAID", yesterday.strftime("%Y-%m-%d ") + "13:05:00", 780,
+ yesterday.strftime("%Y-%m-%d ") + "11:30:00"),
+                       ("ord_004", "user_001", "shop_002", "PAID", three_days_ago.strftime("%Y-%m-%d ") + "14:10:00", 320,
+ three_days_ago.strftime("%Y-%m-%d ") + "13:00:00"),
+                       ("ord_005", "user_004", "shop_001", "PAID", seven_days_ago.strftime("%Y-%m-%d ") + "10:00:00", 899,
+ seven_days_ago.strftime("%Y-%m-%d ") + "09:00:00"),
                        ("ord_007", "user_004", "shop_002", "UNPAID", None, 560, "2026-08-11 09:00:00"),
                        ("ord_008", "user_003", "shop_001", "PAYMENT_FAILED", None, 199, "2026-08-12 09:00:00"),
                        ("ord_009", "user_002", "shop_002", "CANCELLED", None, 560, "2026-08-13 09:00:00"),
-                       ("ord_010", "user_001", "shop_001", "PAID", "2026-08-16 08:00:00", 700, "2026-08-16 07:30:00")],
+                       ("ord_010", "user_001", "shop_001", "PAID", two_days_ago.strftime("%Y-%m-%d ") + "08:00:00", 700,
+ two_days_ago.strftime("%Y-%m-%d ") + "07:30:00")],
             "order_items": [("item_001", "ord_001", "shop_001", "prod_1001", 1, 899),
                              ("item_002", "ord_001", "shop_001", "prod_1002", 1, 49),
                              ("item_003", "ord_001", "shop_001", "prod_1003", 1, 351),
@@ -106,10 +124,13 @@ class SQLiteDataRepository:
                              ("item_010", "ord_004", "shop_002", "prod_3002", 1, 140),
                              ("item_011", "ord_005", "shop_001", "prod_1001", 1, 899),
                              ("item_012", "ord_010", "shop_001", "prod_1004", 1, 700)],
-            "refunds": [("refund_001", "ord_001", "shop_001", "SUCCESS", 100, "2026-08-15 18:00:00"),
-                        ("refund_002", "ord_001", "shop_001", "SUCCESS", 50, "2026-08-16 09:00:00"),
+            "refunds": [("refund_001", "ord_001", "shop_001", "SUCCESS", 100,
+ yesterday.strftime("%Y-%m-%d ") + "18:00:00"),
+                        ("refund_002", "ord_001", "shop_001", "SUCCESS", 50,
+ two_days_ago.strftime("%Y-%m-%d ") + "09:00:00"),
                         ("refund_003", "ord_003", "shop_002", "PENDING", 280, None),
-                        ("refund_004", "ord_002", "shop_001", "FAILED", 49, "2026-08-15 12:00:00")],
+                        ("refund_004", "ord_002", "shop_001", "FAILED", 49,
+ yesterday.strftime("%Y-%m-%d ") + "12:00:00")],
             "refund_items": [("refund_item_001", "refund_001", "shop_001", "item_001", 100),
                               ("refund_item_002", "refund_002", "shop_001", "item_003", 50),
                               ("refund_item_003", "refund_003", "shop_002", "item_008", 280),

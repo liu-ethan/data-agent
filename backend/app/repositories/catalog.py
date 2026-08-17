@@ -6,8 +6,9 @@ import json
 import math
 import re
 from collections import defaultdict, deque
-from datetime import datetime, timezone
-from typing import Any, Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import text
@@ -15,8 +16,13 @@ from sqlalchemy import text
 from ..errors import RuntimeAgentError
 from ..models import CatalogField, CatalogObject, JoinPath, PermissionContext
 from ..services.schema_catalog import (
-    CatalogSnapshot, IndexManifest, SearchDocument, content_version, lexical_tokens,
-    stable_id, token_frequencies,
+    CatalogSnapshot,
+    IndexManifest,
+    SearchDocument,
+    content_version,
+    lexical_tokens,
+    stable_id,
+    token_frequencies,
 )
 from .runtime import RuntimePersistence
 
@@ -39,7 +45,7 @@ class MySQLCatalogRepository:
 
     def synchronize(self, snapshot: CatalogSnapshot) -> CatalogSnapshot:
         """Atomically replace one source's physical snapshot and lexical docs."""
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(UTC).replace(tzinfo=None)
         with self.engine.begin() as connection:
             metrics = [dict(row) for row in connection.execute(text(
                 "SELECT metric_id,name,formula,time_field,grain_json,required_filters_json,"
@@ -544,7 +550,7 @@ class MySQLCatalogRepository:
                           embedding_dimension: int, collections: dict[str, str],
                           document_counts: dict[str, int]) -> IndexManifest:
         manifest_id = f"manifest_{uuid4().hex[:20]}"
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(UTC).replace(tzinfo=None)
         with self.engine.begin() as connection:
             connection.execute(text(
                 "UPDATE catalog_index_manifests SET status='RETIRED' "

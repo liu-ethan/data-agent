@@ -116,3 +116,38 @@ Gateway、Graph 和 Repository 额外必须传递 `catalog_version`、`permissio
 - 核心模型必填、枚举、版本和未知字段测试。
 - Trace ID middleware 测试。
 - 前端基础构建或类型检查。
+
+## 10. Out-of-scope 代码当前已存在 (后续 spec 检查时处理)
+
+下面这些模块不在 spec 00 范围内, 但已经在代码库里实现. 它们由后续 spec 在自己的阶段负责整改, 不在 spec 00 阶段拆目录或重写.
+
+| 模块/文件 | 实际归属的 spec | 备注 |
+| --- | --- | --- |
+| `backend/app/graph/main_graph.py` + `graph/nodes/*` | spec 03 | 五个顶层 LangGraph Node |
+| `backend/app/graph/state.py` | spec 03 | TaskUnderstanding / QueryDraft / ThreadTitleDraft 等 LLM draft |
+| `backend/app/gateways/read_gateway.py` | spec 02 | SQL AST/RLS/EXPLAIN/只读执行 |
+| `backend/app/services/llm.py` | spec 03 | 结构化 LLM 客户端 |
+| `backend/app/services/embedding.py` | spec 04 | Embedding 服务 |
+| `backend/app/services/catalog_retrieval.py` + `catalog_baseline.py` | spec 04 | 分层检索 + fallback baseline |
+| `backend/app/services/schema_catalog.py` | spec 01 | Catalog 采集 |
+| `backend/app/services/permission.py` | spec 01 | MySQL 权限查找 |
+| `backend/app/services/query_grounding.py` | spec 03 | Query plan grounding |
+| `backend/app/repositories/catalog.py` + `catalog_index.py` | spec 01/04 | MySQL catalog + Milvus 索引 |
+| `backend/app/repositories/data.py` | spec 01/02 | MySQL 数据访问 |
+| `backend/app/repositories/runtime.py` | spec 05 | Checkpoint / Artifact / Conversation |
+| `backend/app/memory/stores.py` | spec 05 | In-memory 持久化 |
+| `backend/app/ports/runtime.py` | spec 03 | Protocol 接口 (M0 不需要抽象) |
+| `backend/app/auth.py` | spec 05 | JWT + scrypt 密码哈希 |
+| `backend/app/bootstrap.py` | spec 03 | 生产 wiring |
+| `backend/app/evaluation.py` | spec 07 | 任务级评测 |
+| `backend/app/testing.py` + `testing_adapters/*` | spec 03 | 测试替身 (SQLite + memory) |
+| `frontend/src/workbench/*` + `auth/AuthPage.tsx` | spec 08 | 完整 workbench |
+| `frontend/src/components.tsx` | spec 08 | 图表 + 表格组件 |
+| `migrations/002-008` | spec 01/05 | 运行时持久化 + Checkpoint + 密码 + 注册 |
+| `scripts/catalog_seed.sql` + `index_catalog.py` | spec 01/04 | Catalog 种子 + 索引发布 |
+| `scripts/run_evaluation.py` + `run_production_evaluation.py` | spec 07 | 评测脚本 |
+| `scripts/issue_invite_code.py` + `set_user_password.py` | spec 05 | 用户管理脚本 |
+
+`backend/app/models/contracts.py` 中的 `Intent` 枚举在 spec 00 阶段只需要 `DATA_QUERY` / `SCHEMA_LOOKUP` / `CLARIFICATION` / `UNSUPPORTED` 四个值; 其它 5 个值 (`SCHEMA_QUERY` / `DATA_MUTATION` / `RESULT_TRANSFORM` / `METRIC_EXPLANATION` / `CHAT_OR_OUT_OF_SCOPE`) 由 spec 03 引入, 保留是为了不破坏后续 spec 已有的代码.
+
+`backend/app/models/contracts.py` 中超出 spec 00 §4 范围的模型 (ChatRequest / ChatResponse / RuntimeEvent / ResumeRequest / ThreadDetail / ThreadListResponse / IdentityResponse / UserPreferences / PreferenceUpdate / RecommendedQuestionsResponse / RegistrationResponse / TokenResponse / PasswordLoginRequest / RegisterRequest / ArtifactRecord / Checkpoint / MutationSpec / MutationPreview) 在 spec 00 阶段不删除 — 它们是后续 spec 的契约, 由对应 spec 整改时同步修订.

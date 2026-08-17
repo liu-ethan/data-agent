@@ -19,8 +19,7 @@ from .repositories.catalog import MySQLCatalogRepository
 from .repositories.catalog_index import MilvusCatalogIndex
 from .repositories.data import MySQLDataRepository
 from .repositories.runtime import PersistentResultRepository, RuntimePersistence
-from .services.catalog_retrieval import (LLMReranker,
-                                         ProductionCatalogRetrievalService)
+from .services.catalog_retrieval import LLMReranker, ProductionCatalogRetrievalService
 from .services.embedding import build_embedder
 from .services.llm import StructuredLLM
 from .services.permission import PermissionService

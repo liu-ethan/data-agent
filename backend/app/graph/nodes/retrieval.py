@@ -6,18 +6,22 @@ import time
 from typing import Any
 
 from ...models import Action, CoverageStatus
+from .._events import checkpoint_state, emit_event
 
 
 async def retrieval_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
     state = run["state"]
     started = time.perf_counter()
-    await runtime._emit(run, "node.started", node="retrieval_node", action=Action.RETRIEVE)
+    await emit_event(runtime, run, "node.started",
+                     node="retrieval_node", action=Action.RETRIEVE)
     result = runtime.retrieval.retrieve(
         state.task_frame, run["permission"], state.schema_gap, state.grounded_context_id,
+        existing_context=state.grounded_context,
     )
     context, coverage = await result if hasattr(result, "__await__") else result
     state.grounded_context = context
     state.grounded_context_id = context.context_id
+    state.catalog_version = context.catalog_version
     state.coverage = coverage.status
     state.schema_gap = coverage.schema_gap
     state.model_traces.extend(context.model_traces)
@@ -44,9 +48,10 @@ async def retrieval_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
         state.budgets.get("retrieval_rounds_used", 0)) + 1
     state.goal_checklist["evidence_retrieved"] = (
         coverage.status == CoverageStatus.SUFFICIENT)
-    await runtime._checkpoint(run, "retrieval_node")
-    await runtime._emit(
-        run, "node.completed", node="retrieval_node", action=Action.RETRIEVE,
+    await checkpoint_state(runtime, run, "retrieval_node")
+    await emit_event(
+        runtime, run, "node.completed",
+        node="retrieval_node", action=Action.RETRIEVE,
         duration_ms=round((time.perf_counter() - started) * 1000, 2),
     )
     return {

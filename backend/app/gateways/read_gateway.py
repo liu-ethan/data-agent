@@ -7,8 +7,15 @@ import time
 from typing import Any
 
 from ..errors import RuntimeAgentError
-from ..models import (PermissionContext, QueryPlan, ResultObservation, ResultStatus,
-                     ResultSummary, ScopeMode, TraceFields)
+from ..models import (
+    PermissionContext,
+    QueryPlan,
+    ResultObservation,
+    ResultStatus,
+    ResultSummary,
+    ScopeMode,
+    TraceFields,
+)
 from ..ports import DataQueryPort, ResultRepositoryPort
 from ..services.trace import hash_sql, record
 
@@ -59,6 +66,12 @@ class ReadGateway:
             self._validate_plan_version(plan, permission)
             tables, columns = self._validate_sql(plan.candidate_sql, plan)
             rewritten, params = self._inject_rls(plan.candidate_sql, plan.parameters, permission, tables)
+            # Spec §6 invariant: RLS injection may rewrite the WHERE clause;
+            # the resulting AST must be re-parsed and re-validated against the
+            # same constraints (forbidden nodes, table allowlist, sensitive
+            # columns, star). A successful injection is not allowed to
+            # silently relax any earlier rejection.
+            self._revalidate_after_rls(rewritten)
             self._validate_query_spec(rewritten, tables, columns, plan)
             stage = "explain"
             cost, estimated_rows = self.data.explain(rewritten, params)
@@ -159,7 +172,7 @@ class ReadGateway:
         if any(isinstance(node, exp.Anonymous) and node.name.upper() in {"LOAD_FILE"}
                for node in tree.walk()):
             raise RuntimeAgentError("SQL_FORBIDDEN_OPERATION", "Forbidden SQL function")
-        if not self.allow_select_star and any(isinstance(node, exp.Star) for node in tree.walk()):
+        if not self.allow_select_star and self._has_select_star(tree):
             raise RuntimeAgentError("SQL_FORBIDDEN_OPERATION", "SELECT * is not allowed")
         physical_tables = [source for scope in traverse_scope(tree)
                            for source in scope.sources.values() if isinstance(source, exp.Table)]
@@ -184,7 +197,7 @@ class ReadGateway:
             raise RuntimeAgentError("QUERY_SPEC_MISMATCH", "SQL references objects absent from QuerySpec")
         if self.require_time_filter and tables & FACT_TABLES:
             time_field = plan.query_spec.time_field
-            if not time_field or not re.search(rf"\b{re.escape(time_field.split('.')[-1])}\b", sql, re.I):
+            if not time_field or not re.search(rf"\b{re.escape(time_field.split('.')[-1])}\b", sql, re.IGNORECASE):
                 raise RuntimeAgentError("MISSING_TIME_FILTER", "Fact query has no declared time field")
             if plan.query_spec.time_range:
                 # Both boundaries must be represented; values remain named params.
@@ -197,10 +210,54 @@ class ReadGateway:
             if not expected.issubset(aliases | {c.split(".")[-1].lower() for c in columns}):
                 raise RuntimeAgentError("QUERY_SPEC_MISMATCH", "Expected result columns are absent")
         if any(ref.lower() in {"gmv", "category_gmv", "支付 gmv"} for ref in plan.query_spec.metric_refs) and "orders" in tables:
-            has_status_predicate = bool(re.search(r"\b(?:o\.)?status\b\s*(?:=|in\b)", sql, re.I))
+            has_status_predicate = bool(re.search(r"\b(?:o\.)?status\b\s*(?:=|in\b)", sql, re.IGNORECASE))
             has_paid_value = "PAID" in sql.upper() or any(str(value).upper() == "PAID" for value in plan.parameters.values())
             if not has_status_predicate or not has_paid_value:
                 raise RuntimeAgentError("QUERY_SPEC_MISMATCH", "GMV requires the verified paid-order status filter")
+
+    def _revalidate_after_rls(self, sql: str) -> None:
+        """Re-parse the rewritten SQL after RLS injection and re-check the
+        structural invariants that an injection must not weaken."""
+        try:
+            tree = sqlglot.parse_one(sql.rstrip(";").strip(), read="mysql")
+        except Exception as exc:
+            raise RuntimeAgentError("SQL_PARSE_ERROR",
+                                    "RLS rewrite produced an unparseable statement") from exc
+        forbidden_nodes = tuple(node for node in (
+            exp.Insert, exp.Update, exp.Delete, exp.Create, exp.Drop, exp.Alter,
+            exp.Command, exp.Transaction, exp.Into,
+        ) if node is not None)
+        if any(isinstance(node, forbidden_nodes) for node in tree.walk()):
+            raise RuntimeAgentError("SQL_FORBIDDEN_OPERATION",
+                                    "RLS rewrite introduced a forbidden AST node")
+        physical_tables = [source for scope in traverse_scope(tree)
+                           for source in scope.sources.values() if isinstance(source, exp.Table)]
+        tables = {table.name.lower() for table in physical_tables}
+        if any(table.catalog or table.db for table in physical_tables):
+            raise RuntimeAgentError("SQL_OBJECT_NOT_ALLOWED",
+                                    "RLS rewrite introduced a system schema reference")
+        if not tables.issubset(TABLES):
+            raise RuntimeAgentError("SQL_OBJECT_NOT_ALLOWED",
+                                    "RLS rewrite introduced a table outside the catalog")
+        columns = {f"{column.table.lower()}.{column.name.lower()}" if column.table else column.name.lower()
+                   for column in tree.find_all(exp.Column)}
+        if any(c in SENSITIVE_COLUMNS or c.split(".")[-1] in {"phone", "id_number"} for c in columns):
+            raise RuntimeAgentError("SQL_OBJECT_NOT_ALLOWED",
+                                    "RLS rewrite introduced a sensitive field")
+        if not self.allow_select_star and self._has_select_star(tree):
+            raise RuntimeAgentError("SQL_FORBIDDEN_OPERATION",
+                                    "RLS rewrite introduced SELECT *")
+
+    def _has_select_star(self, tree: exp.Expression) -> bool:
+        """Detect a bare or table-qualified ``SELECT *`` that lives directly
+        under an ``exp.Select``. ``COUNT(*)`` / ``SUM(*)`` / ``users.*`` are
+        intentionally excluded by this check: aggregate stars expand over
+        the expression list, not over column projections, and a table-
+        qualified star is still a projection that the column allowlist
+        below will individually reject if it would expose a sensitive field.
+        """
+        return any(isinstance(node, exp.Star) and isinstance(node.parent, exp.Select)
+                   for node in tree.walk())
 
     def _inject_rls(self, sql: str, parameters: dict[str, Any], permission: PermissionContext,
                     tables: set[str]) -> tuple[str, dict[str, Any]]:

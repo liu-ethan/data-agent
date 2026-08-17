@@ -1,5 +1,9 @@
-from backend.app.services.catalog_baseline import HybridCatalogRetrievalService, SyntheticCatalogRetrievalService, generate_synthetic_metadata
 from backend.app.models import PermissionContext, TaskFrame
+from backend.app.services.catalog_baseline import (
+    HybridCatalogRetrievalService,
+    SyntheticCatalogRetrievalService,
+    generate_synthetic_metadata,
+)
 
 
 def test_synthetic_metadata_has_spec_scale_and_bounded_context():

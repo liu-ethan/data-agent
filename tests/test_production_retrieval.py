@@ -6,16 +6,21 @@ from dataclasses import dataclass
 import pytest
 
 from backend.app.errors import RuntimeAgentError
+from backend.app.graph.nodes.retrieval import retrieval_node
 from backend.app.models import (
-    CatalogField, CatalogObject, JoinPath, PermissionContext, TaskFrame,
+    AgentState,
+    CatalogField,
+    CatalogObject,
+    JoinPath,
+    PermissionContext,
+    TaskFrame,
 )
 from backend.app.services.catalog_retrieval import (
-    ContextBudgeter, LLMReranker, ProductionCatalogRetrievalService,
+    ContextBudgeter,
+    LLMReranker,
+    ProductionCatalogRetrievalService,
 )
-from backend.app.graph.nodes.retrieval import retrieval_node
-from backend.app.models import AgentState
 from backend.app.services.schema_catalog import IndexManifest
-
 
 MANIFEST = IndexManifest(
     manifest_id="manifest_1", catalog_version="catalog_v2",
@@ -186,12 +191,8 @@ def test_retrieval_replaces_model_proposals_with_authoritative_bindings():
 
     class Runtime:
         retrieval = service
-
-        async def _emit(self, *args, **kwargs):
-            return None
-
-        async def _checkpoint(self, *args, **kwargs):
-            return None
+        persistence = None
+        llm = None
 
     state = AgentState(thread_id="thread", request_id="request", user_id="u")
     state.task_frame = TaskFrame(

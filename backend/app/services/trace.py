@@ -5,11 +5,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime, timezone
-from typing import Any, Iterator
-from uuid import uuid4
+from datetime import UTC, datetime
+from typing import Any
 
 from ..models import TraceContext
 
@@ -24,8 +24,30 @@ def hash_sql(sql: str) -> str:
 
 def new_trace(request_id: str, thread_id: str, user_id: str, route: str) -> TraceContext:
     context = TraceContext(request_id=request_id, thread_id=thread_id, user_id=user_id,
-                           route=route, started_at=datetime.now(timezone.utc))
+                           route=route, started_at=datetime.now(UTC))
     _current_trace.set(context)
+    return context
+
+
+def bind_trace(*, thread_id: str | None = None, user_id: str | None = None) -> TraceContext | None:
+    """Update thread_id and/or user_id on the current trace.
+
+    Called by endpoints after authentication and thread resolution so
+    downstream ``record()`` calls carry the user/thread identity. The
+    trace_id, request_id, route and started_at are owned by the
+    ``TraceMiddleware`` and not overwritten here.
+    """
+    context = current_trace()
+    if context is None:
+        return None
+    updates: dict[str, Any] = {}
+    if thread_id is not None:
+        updates["thread_id"] = thread_id
+    if user_id is not None:
+        updates["user_id"] = user_id
+    if updates:
+        context = context.model_copy(update=updates)
+        _current_trace.set(context)
     return context
 
 

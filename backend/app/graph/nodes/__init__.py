@@ -8,8 +8,8 @@ from .retrieval import retrieval_node
 
 __all__ = [
     "agent_node",
-    "retrieval_node",
-    "query_generation_node",
     "execution_gateway_node",
+    "query_generation_node",
     "response_node",
+    "retrieval_node",
 ]

@@ -26,7 +26,7 @@ class TaskUnderstanding(_LLMContract):
     schema_version: Literal["task_understanding_v1"] = "task_understanding_v1"
 
     @model_validator(mode="after")
-    def unresolved_requires_clarification(self) -> "TaskUnderstanding":
+    def unresolved_requires_clarification(self) -> TaskUnderstanding:
         if self.unresolved and self.next_action != "ASK_USER":
             raise ValueError("unresolved concepts require ASK_USER")
         if self.task_type in {"DATA_QUERY", "SCHEMA_QUERY", "METRIC_EXPLANATION"}:
@@ -48,7 +48,7 @@ class QueryDraft(_LLMContract):
     schema_version: Literal["query_draft_v1"] = "query_draft_v1"
 
     @model_validator(mode="after")
-    def status_has_consistent_payload(self) -> "QueryDraft":
+    def status_has_consistent_payload(self) -> QueryDraft:
         if self.status == "SCHEMA_GAP":
             if self.candidate_sql or self.parameters:
                 raise ValueError("SCHEMA_GAP cannot contain executable SQL")

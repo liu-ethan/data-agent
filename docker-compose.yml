@@ -1,10 +1,11 @@
+# Local docker-compose stack. Single source of truth for runtime config is
+# config.yaml; environment variables below only override database/JWT/LLM
+# secrets that should not live in committed YAML.
+
 services:
   mysql:
     image: mysql:8.0
     environment:
-      MYSQL_DATABASE: data_agent
-      MYSQL_USER: agent_migration
-      MYSQL_PASSWORD: ${DRA_MYSQL_MIGRATION_PASSWORD:?set DRA_MYSQL_MIGRATION_PASSWORD}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
     ports: ["3306:3306"]
     volumes: ["mysql_data:/var/lib/mysql"]
@@ -14,10 +15,11 @@ services:
       dockerfile: backend/Dockerfile
     environment:
       DRA_ENVIRONMENT: local
-      DRA_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://192.168.1.120:5173,http://172.17.0.1:5173,http://172.18.0.1:5173
+      DRA_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
       DRA_MYSQL_HOST: mysql
       DRA_MYSQL_PORT: 3306
-      DRA_MYSQL_DATABASE: data_agent
+      DRA_MYSQL_BUSINESS_DATABASE: data_agent_ecommerce
+      DRA_MYSQL_SYSTEM_DATABASE: data_agent_system
       DRA_MYSQL_MIGRATION_USERNAME: agent_migration
       DRA_MYSQL_MIGRATION_PASSWORD: ${DRA_MYSQL_MIGRATION_PASSWORD:?set DRA_MYSQL_MIGRATION_PASSWORD}
       DRA_MYSQL_CONTROL_USERNAME: agent_control

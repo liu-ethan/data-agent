@@ -1,12 +1,12 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlglot import exp, parse_one
 
 from backend.app.errors import RuntimeAgentError
 from backend.app.gateways import ReadGateway
 from backend.app.models import PermissionContext, QueryPlan, QuerySpec
 from backend.app.testing import build_test_gateway
-from sqlglot import exp, parse_one
 
 
 def plan(sql: str, *, objects=None, time_field="orders.paid_at"):

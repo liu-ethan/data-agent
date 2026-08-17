@@ -2,8 +2,8 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
+from backend.app.api import create_app
 from backend.app.api.app import _interrupt_resumable
-from backend.app.main import create_app
 from backend.app.models import AgentState, Checkpoint, Interrupt, RunStatus
 
 
@@ -57,8 +57,9 @@ def test_openapi_publishes_the_generated_sse_event_contract():
         "interrupt.created", "run.completed", "run.failed",
         "thread.title_updated",
     ]
-    response = document["paths"]["/api/chat/stream"]["get"]["responses"]["200"]
-    assert response["content"]["text/event-stream"]["schema"]["$ref"].endswith(
-        "/RuntimeEvent")
+    for method in ("get", "post"):
+        response = document["paths"]["/api/chat/stream"][method]["responses"]["200"]
+        assert response["content"]["text/event-stream"]["schema"]["$ref"].endswith(
+            "/RuntimeEvent")
     assert "/api/auth/login" in document["paths"]
     assert "/api/auth/demo-token" not in document["paths"]

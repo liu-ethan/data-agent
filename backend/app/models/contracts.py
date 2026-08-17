@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
@@ -16,13 +15,27 @@ class Contract(BaseModel):
 
 
 class Intent(StrEnum):
+    """Task intent recognized by the runtime.
+
+    Spec 00 §4.1 defines only the four canonical values:
+
+        DATA_QUERY, SCHEMA_LOOKUP, CLARIFICATION, UNSUPPORTED
+
+    The remaining values were introduced by later specs (spec 03
+    RuntimeGraph, spec 05 Memory and Interrupts) and are kept here so
+    downstream code that already references them does not need to be
+    rewritten as part of spec 00. They are *not* part of the spec 00
+    contract surface and may be revisited when those specs land their
+    own cleanups.
+    """
+
     DATA_QUERY = "DATA_QUERY"
     SCHEMA_LOOKUP = "SCHEMA_LOOKUP"  # legacy wire value
-    SCHEMA_QUERY = "SCHEMA_QUERY"
-    DATA_MUTATION = "DATA_MUTATION"
-    RESULT_TRANSFORM = "RESULT_TRANSFORM"
-    METRIC_EXPLANATION = "METRIC_EXPLANATION"
-    CHAT_OR_OUT_OF_SCOPE = "CHAT_OR_OUT_OF_SCOPE"
+    SCHEMA_QUERY = "SCHEMA_QUERY"  # spec 03+
+    DATA_MUTATION = "DATA_MUTATION"  # spec 06
+    RESULT_TRANSFORM = "RESULT_TRANSFORM"  # spec 05+
+    METRIC_EXPLANATION = "METRIC_EXPLANATION"  # spec 03+
+    CHAT_OR_OUT_OF_SCOPE = "CHAT_OR_OUT_OF_SCOPE"  # spec 03+
     CLARIFICATION = "CLARIFICATION"
     UNSUPPORTED = "UNSUPPORTED"
 
@@ -127,11 +140,12 @@ class PermissionContext(Contract):
     schema_version: str = "permission_context_v1"
 
     @model_validator(mode="after")
-    def allowlist_must_have_scope(self) -> "PermissionContext":
+    def empty_allowlist_becomes_none(self) -> PermissionContext:
+        # Spec 00 §4.1: ALLOWLIST with no shops is treated as NONE —
+        # the default-deny posture. Coercion happens here so callers can
+        # keep expressing "ALLOWLIST" intent while the runtime sees NONE.
         if self.scope_mode == ScopeMode.ALLOWLIST and not self.allowed_shop_ids:
-            # Empty allowlists are represented as NONE at runtime; rejecting here
-            # avoids accidentally creating an unfiltered IN clause.
-            raise ValueError("an empty ALLOWLIST is not a valid permission scope")
+            self.scope_mode = ScopeMode.NONE
         return self
 
 
@@ -300,6 +314,19 @@ class Interrupt(Contract):
     schema_version: str = "interrupt_v1"
 
 
+class SummaryFact(Contract):
+    text: str
+    source: Literal["USER_CONFIRMED", "SYSTEM_OBSERVED", "MODEL_INFERRED"]
+
+
+class RollingSummary(Contract):
+    facts: list[SummaryFact] = Field(default_factory=list)
+    result_ids: list[str] = Field(default_factory=list)
+    artifact_ids: list[str] = Field(default_factory=list)
+    pending_mutation: dict[str, Any] | None = None
+    schema_version: str = "rolling_summary_v1"
+
+
 class AgentState(Contract):
     thread_id: str
     request_id: str
@@ -310,6 +337,7 @@ class AgentState(Contract):
     context_frame: ContextFrame | None = None
     grounded_context_id: str | None = None
     grounded_context: GroundedContext | None = None
+    catalog_version: str | None = None
     coverage: CoverageStatus | Literal["UNKNOWN"] = "UNKNOWN"
     schema_gap: SchemaGap | None = None
     query_plan_id: str | None = None
@@ -322,8 +350,10 @@ class AgentState(Contract):
     goal_checklist: dict[str, bool] = Field(default_factory=dict)
     budgets: dict[str, int | float] = Field(default_factory=dict)
     action_history: list[dict[str, Any]] = Field(default_factory=list)
+    last_action_fingerprint: str | None = None
     pending_interrupt: Interrupt | None = None
     messages: list[dict[str, str]] = Field(default_factory=list)
+    rolling_summary: RollingSummary | None = None
     trace_id: str | None = None
     model_traces: list[dict[str, Any]] = Field(default_factory=list)
     schema_version: str = "agent_state_v1"
@@ -364,7 +394,7 @@ class RegisterRequest(Contract):
     invite_code: str = Field(min_length=4, max_length=64)
 
     @model_validator(mode="after")
-    def passwords_match(self) -> "RegisterRequest":
+    def passwords_match(self) -> RegisterRequest:
         if self.password != self.confirm_password:
             raise ValueError("passwords do not match")
         return self

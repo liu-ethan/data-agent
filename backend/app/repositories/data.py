@@ -14,7 +14,6 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from ..errors import RuntimeAgentError
 
-
 _FORBIDDEN_READER_PRIVILEGES = {
     "ALL PRIVILEGES", "ALTER", "CREATE", "DELETE", "DROP", "FILE", "GRANT OPTION",
     "INDEX", "INSERT", "LOCK TABLES", "REFERENCES", "RELOAD", "SHUTDOWN",
@@ -48,16 +47,18 @@ class MySQLDataRepository:
     def __init__(self, mysql: dict[str, Any], *, max_execution_ms: int = 5000) -> None:
         account = mysql.get("accounts", {}).get("reader", {})
         username, password = account.get("username"), account.get("password")
-        if not all((mysql.get("host"), mysql.get("database"), username, password)):
+        business_database = mysql.get("business_database") or mysql.get("database")
+        if not all((mysql.get("host"), business_database, username, password)):
             raise RuntimeError("MySQL reader account is not fully configured")
         url = URL.create("mysql+pymysql", username=username, password=password,
                          host=mysql["host"], port=int(mysql.get("port", 3306)),
-                         database=mysql["database"], query={"charset": mysql.get("charset", "utf8mb4")})
+                         database=business_database, query={"charset": mysql.get("charset", "utf8mb4")})
         self.engine = create_engine(url, future=True, pool_pre_ping=True,
                                     pool_size=int(mysql.get("pool_size", 10)),
                                     max_overflow=int(mysql.get("max_overflow", 20)),
                                     pool_recycle=int(mysql.get("pool_recycle_seconds", 1800)))
         self.configured_username = str(username)
+        self.business_database = str(business_database)
         self.max_execution_ms = max_execution_ms
         self._verified = False
         self._verification_lock = threading.Lock()

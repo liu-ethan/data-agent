@@ -9,14 +9,17 @@ from dataclasses import asdict
 from typing import Any
 
 from ...errors import RuntimeAgentError
+from ...memory import PromptContextBuilder, RollingSummaryBuilder
 from ...models import Action, ArtifactType, Intent, ResultStatus, RunStatus
+from .._events import checkpoint_state, emit_event
 from ..state import AnswerDraft, ConversationalAnswerDraft
 
 
 async def response_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
     state = run["state"]
     started = time.perf_counter()
-    await runtime._emit(run, "node.started", node="response_node", action=Action.RESPOND)
+    await emit_event(runtime, run, "node.started",
+                     node="response_node", action=Action.RESPOND)
     if state.task_frame and state.task_frame.intent == Intent.CHAT_OR_OUT_OF_SCOPE:
         if runtime.llm:
             draft, trace = await runtime.llm.structured(
@@ -60,7 +63,7 @@ async def response_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
                 conversation_id=state.thread_id,
                 artifact_type=ArtifactType.FIELD_LIST,
                 payload={
-                    "fields": [
+                    "items": [
                         {"ordinal": index + 1, "field": name}
                         for index, name in enumerate(field_names)
                     ]
@@ -76,13 +79,10 @@ async def response_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
     elif state.latest_observation and state.latest_observation.summary:
         summary = state.latest_observation.summary.model_dump(mode="json")
         if runtime.llm:
+            prompt = PromptContextBuilder().build(node="response_node", state=state)
             draft, trace = await runtime.llm.structured(
                 system="Write a concise Chinese data-analysis answer from the result summary only. Do not invent values or expose SQL, prompts, secrets or hidden reasoning.",
-                user=json.dumps({
-                    "task": state.task_frame.model_dump(mode="json"),
-                    "result_id": state.latest_observation.result_id,
-                    "summary": summary,
-                }, ensure_ascii=False),
+                user=json.dumps(prompt, ensure_ascii=False),
                 schema=AnswerDraft,
                 purpose="response",
                 temperature=0.2,
@@ -156,9 +156,16 @@ async def response_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
                 source_result_ids=[result_id],
             )
             state.artifact_ids.append(chart.artifact_id)
-    state.status = RunStatus.SUCCEEDED
-    state.next_action = Action.END
-    state.goal_checklist["response_delivered"] = True
+    data_query = state.task_frame and state.task_frame.intent == Intent.DATA_QUERY
+    if data_query and not state.goal_checklist.get("query_executed"):
+        state.status = RunStatus.FAILED
+        state.next_action = Action.FAIL
+        state.previous_query_error = state.previous_query_error or "GRAPH_TERMINATED"
+    else:
+        state.status = RunStatus.SUCCEEDED
+        state.next_action = Action.END
+        state.goal_checklist["response_delivered"] = True
+    state.rolling_summary = RollingSummaryBuilder().update(state)
     usage = {
         "models": sorted({
             str(item.get("model")) for item in state.model_traces if item.get("model")
@@ -170,9 +177,10 @@ async def response_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
         "model_duration_ms": round(
             sum(float(item.get("duration_ms") or 0) for item in state.model_traces), 2),
     }
-    await runtime._checkpoint(run, "response_node")
-    await runtime._emit(
-        run, "node.completed", node="response_node", action=Action.RESPOND,
+    await checkpoint_state(runtime, run, "response_node")
+    await emit_event(
+        runtime, run, "node.completed",
+        node="response_node", action=Action.RESPOND,
         duration_ms=round((time.perf_counter() - started) * 1000, 2),
     )
     return {

@@ -5,12 +5,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import datetime, timezone
 import json
-from pathlib import Path
 import statistics
 import sys
 import time
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -19,7 +19,10 @@ from backend.app.auth import Principal
 from backend.app.bootstrap import build_runtime_container
 from backend.app.config import load_settings
 from backend.app.models import TaskFrame
-from backend.app.services.catalog_retrieval import ProductionCatalogRetrievalService
+from backend.app.services.catalog_retrieval import (
+    PassthroughReranker,
+    ProductionCatalogRetrievalService,
+)
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -29,10 +32,8 @@ def percentile(values: list[float], fraction: float) -> float:
     return ordered[min(len(ordered) - 1, int((len(ordered) - 1) * fraction))]
 
 
-class IdentityReranker:
-    async def rerank(self, query, objects):
-        return [item.object_id for item in objects], {
-            "purpose": "reranker", "disabled_for_ablation": True}
+class IdentityReranker(PassthroughReranker):
+    """Backward-compatible alias used by CLI ablation."""
 
 
 def arguments() -> argparse.Namespace:
@@ -118,7 +119,7 @@ async def main() -> int:
         manifest = container.catalog_repository.active_manifest()
         report = {
             "mode": "production_schema_rag",
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "case_count": len(outcomes),
             "passed": sum(bool(item["passed"]) for item in outcomes),
             "catalog_version": manifest.catalog_version,

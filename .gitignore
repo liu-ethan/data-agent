@@ -1,10 +1,43 @@
 .git/
+
+# Local runtime config and secrets. Copy "config template.yaml" to config.yaml.
 config.yaml
+.secrets.yaml
+.env
+.env.*
+!.env.example
+
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+.venv/
+venv/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Embedded Milvus Lite, local DBs, downloaded embedding models
+data/
+*.db
+
+# Frontend
 frontend/node_modules/
 frontend/dist/
 frontend/test-results/
 frontend/playwright-report/
-data/*.db
+frontend/tsconfig.tsbuildinfo
+
+# Generated evaluation reports (reproduced by make evaluate-rag)
+reports/*.json
+reports/*.csv
+
+# Local-only helper with hardcoded MySQL passwords
+scripts/setup_local.sh
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

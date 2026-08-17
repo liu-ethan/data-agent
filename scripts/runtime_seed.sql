@@ -1,5 +1,7 @@
 -- Local development identities only.  Production users/scopes are provisioned
 -- by the identity administration workflow, never from application requests.
+USE data_agent_system;
+
 INSERT INTO app_users(user_id,role_name,active,policy_version,created_at,updated_at) VALUES
 ('u_demo_user','USER',TRUE,'policy_local_v2',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
 ('u_demo_admin','ADMIN',TRUE,'policy_local_v2',UTC_TIMESTAMP(),UTC_TIMESTAMP())

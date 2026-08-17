@@ -27,7 +27,7 @@ Schema、指标、Join 和 Verified SQL 属于共享语义目录，不属于长�
 - ReferenceResolver。
 - PromptContextBuilder。
 - 结构化滚动摘要。
-- Key-based UserMemoryStore。
+- Key-based 长期偏好（`RuntimePersistence` / `user_memories`）。
 - React Data Table、CSV、ECharts DSL。
 
 ## 4. Out of Scope
@@ -58,7 +58,7 @@ Schema、指标、Join 和 Verified SQL 属于共享语义目录，不属于长�
 }
 ```
 
-`owner_user_id`、当前 `PermissionContext`、`permission_snapshot`、`catalog_version` 和 `expires_at` 必须在每次读取制品时重新校验。过期、权限变化或目录版本不兼容时返回 `ARTIFACT_STALE`，不能返回旧内容。
+`owner_user_id`、当前 `PermissionContext`、`permission_policy_version`、`catalog_version` 和 `expires_at` 必须在每次读取制品时重新校验。过期、权限变化或目录版本不兼容时返回 `ARTIFACT_STALE`，不能返回旧内容。`permission_snapshot` 是概念名，持久化字段与 Spec 00 一致，使用 `permission_policy_version`。FIELD_LIST 的序数字段放在 payload.`items`，不放在 ArtifactSpec 本体。
 
 ## 6. Interrupt 契约
 
@@ -115,20 +115,33 @@ Checkpoint 最小字段为：`checkpoint_id`、`thread_id`、`state_version`、`
 
 ## 9. 验收标准
 
-- 15 条多轮任务得到正确、可解释的指代结果。
+- 核心指代（「第一个字段」「刚才结果」）由 `ReferenceResolver` 绑定到 Artifact payload，而不是对话摘要。
 - 进程重启后可恢复未完成会话。
-- HITL 前后不重复执行已完成步骤。
+- HITL / Interrupt 前后不重复执行已完成步骤；重复 `client_request_id` 返回第一次结果。
 - 完整结果集不进入 Prompt。
 - 表格、CSV 和图表都引用真实 `result_id`。
-- 长期偏好不会覆盖本轮明确条件。
+- 长期偏好不会覆盖本轮明确条件；「这次只看……」不得写入 `user_memories`。
 - Interrupt 过期、权限变化、版本冲突和重复 resume 都有明确错误响应。
+- 15 条多轮任务级评测属于 Spec 07，不在本 spec 用 LLM 端到端冒充完成。
 
 ## 10. 测试证据
 
-- Checkpoint 恢复测试。
-- 同线程并发乐观锁测试。
-- Artifact 指代测试。
-- Artifact 过期和权限变化测试。
-- 滚动摘要 JSON Schema 测试。
-- 长期记忆写入与召回测试。
-- CSV 和 ECharts DSL 契约测试。
+- Spec 05 §8 不变量 (`tests/test_memory_spec05.py`)：`ReferenceResolver` 绑定第一个字段和刚才结果、PromptContextBuilder 不注入 preview/行数据、滚动摘要区分 `USER_CONFIRMED` / `SYSTEM_OBSERVED` 并完整保留 MutationSpec、明确条件压过 `default_shop_id`、一次性过滤不写长期记忆、CSV/CHART_DSL 引用 `result_id`、FIELD_LIST 使用 `items`、Interrupt 过期不可 resume、重复 resume 幂等、Checkpoint 乐观锁、Artifact 权限变化返回 `ARTIFACT_STALE`。
+- MySQL/SQLite 持久化与所有权 (`tests/test_persistence.py`)：Checkpoint 历史链、幂等、消息、结果分页、Artifact 再校验、已确认偏好版本化。
+- 进程重启后恢复 WAITING_FOR_USER (`tests/test_graph.py::test_waiting_thread_resumes_after_runtime_process_restart`)。
+- 生产路径不使用 SQLite `CheckpointStore` (`tests/test_architecture.py::test_production_graph_is_wired_to_durable_runtime_persistence`)。
+
+## 11. 模块拆分 (M5 重构后)
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `repositories/runtime.py` | ~510 | MySQL Checkpointer、消息、结果、Artifact、用户偏好与偏好审计 |
+| `memory/references.py` | ~70 | `ReferenceResolver`，把「第一个字段」「刚才」解析为 field / result_id |
+| `memory/prompt_context.py` | ~60 | `PromptContextBuilder`，按 Node 投影最小 Prompt，不含结果行 |
+| `memory/summary.py` | ~40 | `RollingSummaryBuilder`，事实带 `USER_CONFIRMED` / `SYSTEM_OBSERVED` / `MODEL_INFERRED` |
+| `memory/preferences.py` | ~50 | 明确条件提取、长期偏好写入判定、`default_shop_id` 召回且可被本轮条件覆盖 |
+| `graph/_task_understanding.py` | ~170 | 组装 TaskFrame：指代解析 + 明确条件 + 偏好 overlay |
+| `graph/nodes/agent.py` | ~140 | 读取偏好后调用 understand_task；Interrupt 前 checkpoint |
+| `graph/nodes/response.py` | ~190 | 创建 FIELD_LIST / RESULT_TABLE / CSV / CHART_DSL；更新滚动摘要 |
+
+SQLite `CheckpointStore` / 内存 `ArtifactStore` / `UserMemoryStore` 已删除。测试和生产共用 `RuntimePersistence`。偏好覆盖写入 `user_memory_history`（`migrations/009_system_user_memory_history.sql`）。

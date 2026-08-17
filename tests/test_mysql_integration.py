@@ -12,12 +12,16 @@ from sqlalchemy import delete
 from backend.app.bootstrap import build_runtime_container
 from backend.app.config import load_settings
 from backend.app.gateways import ReadGateway
-from backend.app.models import (PermissionContext, QueryPlan, QuerySpec,
-                                ResultStatus, ScopeMode, TimeRange)
+from backend.app.models import (
+    PermissionContext,
+    QueryPlan,
+    QuerySpec,
+    ResultStatus,
+    ScopeMode,
+    TimeRange,
+)
 from backend.app.repositories.data import MySQLDataRepository
-from backend.app.repositories.runtime import (PersistentResultRepository,
-                                               RuntimePersistence)
-
+from backend.app.repositories.runtime import PersistentResultRepository, RuntimePersistence
 
 pytestmark = pytest.mark.mysql_integration
 

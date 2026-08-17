@@ -1,5 +1,7 @@
 -- Deterministic catalog seed. It is intentionally separate from business rows
 -- so catalog versions can be advanced without rewriting transaction data.
+USE data_agent_system;
+
 INSERT INTO catalog_sources(source_id,name,domain,catalog_version,owner,created_at) VALUES
 ('mysql_ecommerce_local','Ecommerce MySQL','ECOMMERCE_TRADE','catalog_v1','data-platform','2026-08-16 10:00:00')
 ON DUPLICATE KEY UPDATE name=VALUES(name),catalog_version=VALUES(catalog_version);

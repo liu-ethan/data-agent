@@ -6,10 +6,13 @@ from dataclasses import dataclass
 import pytest
 
 from backend.app.config import load_settings
-from backend.app.graph import RuntimeGraph
 from backend.app.graph.nodes import agent_node
-from backend.app.graph.state import (AnswerDraft, ConversationalAnswerDraft,
-                                     QueryDraft, TaskUnderstanding)
+from backend.app.graph.state import (
+    AnswerDraft,
+    ConversationalAnswerDraft,
+    QueryDraft,
+    TaskUnderstanding,
+)
 from backend.app.models import AgentState, PermissionContext, RunStatus
 from backend.app.repositories.runtime import RuntimePersistence
 from backend.app.testing import build_test_permission, build_test_runtime
@@ -40,6 +43,10 @@ class ScriptedLLM:
                 mentions={"metric": ["GMV"], "dimension": ["品类"]}), ScriptTrace()
         if schema is QueryDraft:
             task = json.loads(user)["task"]
+            # time_range dates are serialized as ISO strings; the runtime
+            # expects MySQL DATETIME placeholders ("YYYY-MM-DD HH:MM:SS").
+            start = task["time_range"]["start"].split("T")[0] + " 00:00:00"
+            end = task["time_range"]["end"].split("T")[0] + " 00:00:00"
             return QueryDraft(
                 status="QUERY_PLAN",
                 candidate_sql=(
@@ -52,8 +59,8 @@ class ScriptedLLM:
                     "AND o.paid_at<:end GROUP BY c.category_id,c.category_name "
                     "ORDER BY category_gmv DESC LIMIT :max_rows"),
                 parameters={"status": "PAID",
-                            "start": task["time_range"]["start"],
-                            "end": task["time_range"]["end"],
+                            "start": start,
+                            "end": end,
                             "max_rows": 1000},
                 metric_refs=["category_gmv"],
                 dimension_refs=["categories.category_name"],
@@ -114,14 +121,16 @@ def test_schema_question_does_not_execute_sql():
 
 
 def test_today_time_range_and_driver_placeholders_are_canonicalized():
-    resolved = RuntimeGraph._time_range("再查今天的", "Asia/Shanghai")
+    from backend.app.graph._sql_canonicalizer import canonicalize_parameters
+    from backend.app.graph._time_parser import parse_time_range
+    resolved = parse_time_range("再查今天的", "Asia/Shanghai")
     assert resolved.start.date() == resolved.end.date()
     assert str(resolved.start.tzinfo) == "Asia/Shanghai"
-    utc = RuntimeGraph._time_range("再查今天的", "UTC")
+    utc = parse_time_range("再查今天的", "UTC")
     assert str(utc.start.tzinfo) == "UTC"
     with pytest.raises(Exception, match="IANA"):
-        RuntimeGraph._time_range("昨天", "Mars/Olympus")
-    assert RuntimeGraph._canonicalize_parameters(
+        parse_time_range("昨天", "Mars/Olympus")
+    assert canonicalize_parameters(
         "SELECT 1 FROM orders WHERE paid_at >= %(start_ts)s", {"start_ts": "x"}
     ).endswith("paid_at >= :start_ts")
 
@@ -150,7 +159,7 @@ def test_llm_agent_runs_typed_grounded_query_and_evidence_bound_answer():
     assert response.answer == "查询完成，各品类 GMV 已按降序返回。"
     assert response.result_ids
     assert llm.calls == [
-        ("agent", "task_understanding_v3", "TaskUnderstanding"),
+        ("agent", "task_understanding_v4", "TaskUnderstanding"),
         ("query_generation", "query_generation_v1", "QueryDraft"),
         ("response", "response_v1", "AnswerDraft"),
     ]
@@ -180,7 +189,7 @@ def test_open_ended_input_uses_llm_conversational_fallback_without_schema_or_sql
     assert "GENERATE" not in actions
     assert "EXECUTE" not in actions
     assert llm.calls == [
-        ("agent", "task_understanding_v3", "TaskUnderstanding"),
+        ("agent", "task_understanding_v4", "TaskUnderstanding"),
         ("conversational_response", "conversational_response_v1",
          "ConversationalAnswerDraft"),
     ]

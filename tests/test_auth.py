@@ -7,12 +7,10 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from backend.app.auth import (JWTAuthenticator, Principal, hash_password,
-                              verify_password)
+from backend.app.auth import JWTAuthenticator, Principal, hash_password, verify_password
 from backend.app.errors import RuntimeAgentError
 from backend.app.repositories.runtime import RuntimePersistence
 from backend.app.services.permission import PermissionService
-
 
 SECRET = "test-signing-secret-with-at-least-32-bytes"
 

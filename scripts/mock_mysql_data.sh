@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 
 # Seed the deterministic ecommerce dataset required by Spec 01.
+# Targets the business database (data_agent_ecommerce by default); system
+# tables (catalog, identity, runtime, sessions, memories) live in
+# data_agent_system and are not touched by this script.
 # This script only validates existing tables and writes rows; it never creates
 # or alters tables.
 
@@ -8,7 +11,7 @@ set -Eeuo pipefail
 
 MYSQL_HOST="${MYSQL_HOST:-localhost}"
 MYSQL_PORT="${MYSQL_PORT:-3306}"
-MYSQL_DATABASE="${MYSQL_DATABASE:-data_agent}"
+MYSQL_DATABASE="${MYSQL_DATABASE:-data_agent_ecommerce}"
 MYSQL_USER="${MYSQL_USER:-${MYSQL_ROOT_USER:-root}}"
 MYSQL_PASSWORD="${MYSQL_PASSWORD:-${MYSQL_ROOT_PASSWORD:-}}"
 
@@ -45,7 +48,7 @@ Connection environment variables:
   MYSQL_ROOT_USER, MYSQL_ROOT_PASSWORD (legacy aliases)
 
 Example:
-  MYSQL_ROOT_PASSWORD='...' MYSQL_DATABASE=data_agent \
+  MYSQL_ROOT_PASSWORD='...' MYSQL_DATABASE=data_agent_ecommerce \
     scripts/mock_mysql_data.sh seed
 EOF
 }
@@ -216,11 +219,11 @@ EOF
 )"
 
   REFUND_COLUMNS="\`refund_id\`, \`order_id\`, \`$REFUND_STATUS_COLUMN\`, \`refund_amount\`, \`refunded_at\`"
-  REFUND_VALUES="$(cat <<'EOF'
-('refund_001', 'ord_001', 'SUCCESS', 100.00, '2026-08-15 18:00:00'),
-('refund_002', 'ord_001', 'SUCCESS', 50.00, '2026-08-16 09:00:00'),
+  REFUND_VALUES="$(cat <<EOF
+('refund_001', 'ord_001', 'SUCCESS', 100.00, '${YESTERDAY} 18:00:00'),
+('refund_002', 'ord_001', 'SUCCESS', 50.00, '${TWO_DAYS_AGO} 09:00:00'),
 ('refund_003', 'ord_003', 'PENDING', 280.00, NULL),
-('refund_004', 'ord_002', 'FAILED', 49.00, '2026-08-15 12:00:00')
+('refund_004', 'ord_002', 'FAILED', 49.00, '${YESTERDAY} 12:00:00')
 EOF
 )"
   REFUND_ITEM_COLUMNS="\`refund_item_id\`, \`refund_id\`, \`order_item_id\`, \`$REFUND_ITEM_AMOUNT_COLUMN\`"
@@ -277,32 +280,46 @@ EOF
 }
 
 seed_data() {
+  # Order dates are anchored to the runtime clock so the deterministic
+  # eval suite (which queries "昨天") keeps matching whichever calendar
+  # day the seed runs on. The runtime reads Asia/Shanghai; the MySQL
+  # session uses the OS-local timezone, which is also Asia/Shanghai in
+  # our dev container.
+  YESTERDAY=$(date -d 'yesterday' '+%Y-%m-%d')
+  TWO_DAYS_AGO=$(date -d '2 days ago' '+%Y-%m-%d')
+  THREE_DAYS_AGO=$(date -d '3 days ago' '+%Y-%m-%d')
+  SEVEN_DAYS_AGO=$(date -d '7 days ago' '+%Y-%m-%d')
+  TODAY=$(date '+%Y-%m-%d')
+
   build_compatibility_sql
   info "写入 $SEED_VERSION"
 
-  run_mysql --default-character-set=utf8mb4 <<SQL
+  # The heredoc is quoted ('SQL') so the embedded backticks stay as
+  # MySQL identifier quotes; the date placeholders are substituted by
+  # sed after the heredoc is read.
+  HEREDOC_SQL="$(cat <<'SQL'
 SET NAMES utf8mb4;
 START TRANSACTION;
 
-INSERT INTO \`shops\` (\`shop_id\`, \`shop_name\`, \`region_code\`, \`region_name\`, \`status\`) VALUES
+INSERT INTO `shops` (`shop_id`, `shop_name`, `region_code`, `region_name`, `status`) VALUES
   ('shop_001', '东城数码旗舰店', 'CN-EAST', '华东', 'ACTIVE'),
   ('shop_002', '华南生活馆', 'CN-SOUTH', '华南地区', 'ACTIVE'),
   ('shop_003', '西部家居店', 'CN-WEST', '西部', 'INACTIVE')
 ON DUPLICATE KEY UPDATE
-  \`shop_name\` = VALUES(\`shop_name\`), \`region_code\` = VALUES(\`region_code\`),
-  \`region_name\` = VALUES(\`region_name\`), \`status\` = VALUES(\`status\`);
+  `shop_name` = VALUES(`shop_name`), `region_code` = VALUES(`region_code`),
+  `region_name` = VALUES(`region_name`), `status` = VALUES(`status`);
 
-INSERT INTO \`users\` (\`$USER_ID_COLUMN\`, \`phone\`, \`id_number\`, \`created_at\`) VALUES
+INSERT INTO `users` (`$USER_ID_COLUMN`, `phone`, `id_number`, `created_at`) VALUES
   ('user_001', '13800000001', '110101199001011234', '2026-07-01 09:00:00'),
   ('user_002', '13800000002', '310101199202022345', '2026-07-03 10:30:00'),
   ('user_003', '13900000003', '440101198803033456', '2026-07-05 14:20:00'),
   ('user_004', '13900000004', '510101199504044567', '2026-07-08 16:45:00')
 ON DUPLICATE KEY UPDATE
-  \`$USER_ID_COLUMN\` = VALUES(\`$USER_ID_COLUMN\`),
-  \`phone\` = VALUES(\`phone\`), \`id_number\` = VALUES(\`id_number\`),
-  \`created_at\` = VALUES(\`created_at\`);
+  `$USER_ID_COLUMN` = VALUES(`$USER_ID_COLUMN`),
+  `phone` = VALUES(`phone`), `id_number` = VALUES(`id_number`),
+  `created_at` = VALUES(`created_at`);
 
-INSERT INTO \`categories\` (\`category_id\`, \`parent_id\`, \`category_name\`) VALUES
+INSERT INTO `categories` (`category_id`, `parent_id`, `category_name`) VALUES
   ('cat_100', NULL, '数码'),
   ('cat_110', 'cat_100', '手机通讯'),
   ('cat_120', 'cat_100', '电脑周边'),
@@ -311,9 +328,9 @@ INSERT INTO \`categories\` (\`category_id\`, \`parent_id\`, \`category_name\`) V
   ('cat_300', NULL, '美妆'),
   ('cat_310', 'cat_300', '护肤')
 ON DUPLICATE KEY UPDATE
-  \`parent_id\` = VALUES(\`parent_id\`), \`category_name\` = VALUES(\`category_name\`);
+  `parent_id` = VALUES(`parent_id`), `category_name` = VALUES(`category_name`);
 
-INSERT INTO \`products\` (\`product_id\`, \`shop_id\`, \`category_id\`, \`product_name\`, \`status\`) VALUES
+INSERT INTO `products` (`product_id`, `shop_id`, `category_id`, `product_name`, `status`) VALUES
   ('prod_1001', 'shop_001', 'cat_110', '智能手机', 'ACTIVE'),
   ('prod_1002', 'shop_001', 'cat_110', '手机保护壳', 'ACTIVE'),
   ('prod_1003', 'shop_001', 'cat_120', '无线耳机', 'ACTIVE'),
@@ -325,44 +342,65 @@ INSERT INTO \`products\` (\`product_id\`, \`shop_id\`, \`category_id\`, \`produc
   ('prod_3003', 'shop_003', 'cat_310', '旅行护肤套装', 'INACTIVE'),
   ('prod_2003', 'shop_002', 'cat_120', '无线耳机', 'ACTIVE')
 ON DUPLICATE KEY UPDATE
-  \`shop_id\` = VALUES(\`shop_id\`), \`category_id\` = VALUES(\`category_id\`),
-  \`product_name\` = VALUES(\`product_name\`), \`status\` = VALUES(\`status\`);
+  `shop_id` = VALUES(`shop_id`), `category_id` = VALUES(`category_id`),
+  `product_name` = VALUES(`product_name`), `status` = VALUES(`status`);
 
-INSERT INTO \`orders\` (\`order_id\`, \`$ORDER_BUYER_COLUMN\`, \`shop_id\`, \`status\`, \`paid_at\`, \`pay_amount\`, \`created_at\`) VALUES
-  ('ord_001', 'user_001', 'shop_001', 'PAID', '2026-08-15 09:10:00', 1299.00, '2026-08-15 08:50:00'),
-  ('ord_002', 'user_002', 'shop_001', 'PAID', '2026-08-14 11:20:00', 500.00, '2026-08-14 11:00:00'),
-  ('ord_003', 'user_003', 'shop_002', 'PAID', '2026-08-15 13:05:00', 780.00, '2026-08-15 12:40:00'),
-  ('ord_004', 'user_001', 'shop_002', 'PAID', '2026-08-12 14:10:00', 320.00, '2026-08-12 13:55:00'),
-  ('ord_005', 'user_004', 'shop_001', 'PAID', '2026-08-10 10:00:00', 899.00, '2026-08-10 09:40:00'),
-  ('ord_007', 'user_004', 'shop_002', 'UNPAID', NULL, 560.00, '2026-08-15 16:00:00'),
-  ('ord_008', 'user_003', 'shop_001', 'PAYMENT_FAILED', NULL, 199.00, '2026-08-13 10:00:00'),
-  ('ord_009', 'user_002', 'shop_002', 'CANCELLED', NULL, 560.00, '2026-08-09 12:00:00'),
-  ('ord_010', 'user_001', 'shop_001', 'PAID', '2026-08-16 08:00:00', 700.00, '2026-08-16 07:40:00')
+INSERT INTO `orders` (`order_id`, `$ORDER_BUYER_COLUMN`, `shop_id`, `status`, `paid_at`, `pay_amount`, `created_at`) VALUES
+  ('ord_001', 'user_001', 'shop_001', 'PAID', '__YESTERDAY__ 09:10:00', 1299.00, '__YESTERDAY__ 08:50:00'),
+  ('ord_002', 'user_002', 'shop_001', 'PAID', '__TWO_DAYS_AGO__ 11:20:00', 500.00, '__TWO_DAYS_AGO__ 11:00:00'),
+  ('ord_003', 'user_003', 'shop_002', 'PAID', '__YESTERDAY__ 13:05:00', 780.00, '__YESTERDAY__ 12:40:00'),
+  ('ord_004', 'user_001', 'shop_002', 'PAID', '__THREE_DAYS_AGO__ 14:10:00', 320.00, '__THREE_DAYS_AGO__ 13:55:00'),
+  ('ord_005', 'user_004', 'shop_001', 'PAID', '__SEVEN_DAYS_AGO__ 10:00:00', 899.00, '__SEVEN_DAYS_AGO__ 09:40:00'),
+  ('ord_007', 'user_004', 'shop_002', 'UNPAID', NULL, 560.00, '__YESTERDAY__ 16:00:00'),
+  ('ord_008', 'user_003', 'shop_001', 'PAYMENT_FAILED', NULL, 199.00, '__TWO_DAYS_AGO__ 10:00:00'),
+  ('ord_009', 'user_002', 'shop_002', 'CANCELLED', NULL, 560.00, '__THREE_DAYS_AGO__ 12:00:00'),
+  ('ord_010', 'user_001', 'shop_001', 'PAID', '__TWO_DAYS_AGO__ 08:00:00', 700.00, '__TWO_DAYS_AGO__ 07:40:00')
 ON DUPLICATE KEY UPDATE
-  \`$ORDER_BUYER_COLUMN\` = VALUES(\`$ORDER_BUYER_COLUMN\`), \`shop_id\` = VALUES(\`shop_id\`),
-  \`status\` = VALUES(\`status\`), \`paid_at\` = VALUES(\`paid_at\`),
-  \`pay_amount\` = VALUES(\`pay_amount\`), \`created_at\` = VALUES(\`created_at\`);
+  `$ORDER_BUYER_COLUMN` = VALUES(`$ORDER_BUYER_COLUMN`), `shop_id` = VALUES(`shop_id`),
+  `status` = VALUES(`status`), `paid_at` = VALUES(`paid_at`),
+  `pay_amount` = VALUES(`pay_amount`), `created_at` = VALUES(`created_at`);
 
-INSERT INTO \`order_items\` ($ORDER_ITEM_COLUMNS) VALUES
+INSERT INTO `order_items` ($ORDER_ITEM_COLUMNS) VALUES
 $ORDER_ITEM_VALUES
 ON DUPLICATE KEY UPDATE
-  \`order_id\` = VALUES(\`order_id\`), \`product_id\` = VALUES(\`product_id\`),
-  \`quantity\` = VALUES(\`quantity\`), \`item_paid_amount\` = VALUES(\`item_paid_amount\`);
+  `order_id` = VALUES(`order_id`), `product_id` = VALUES(`product_id`),
+  `quantity` = VALUES(`quantity`), `item_paid_amount` = VALUES(`item_paid_amount`);
 
-INSERT INTO \`refunds\` ($REFUND_COLUMNS) VALUES
+INSERT INTO `refunds` ($REFUND_COLUMNS) VALUES
 $REFUND_VALUES
 ON DUPLICATE KEY UPDATE
-  \`order_id\` = VALUES(\`order_id\`), \`$REFUND_STATUS_COLUMN\` = VALUES(\`$REFUND_STATUS_COLUMN\`),
-  \`refund_amount\` = VALUES(\`refund_amount\`), \`refunded_at\` = VALUES(\`refunded_at\`);
+  `order_id` = VALUES(`order_id`), `$REFUND_STATUS_COLUMN` = VALUES(`$REFUND_STATUS_COLUMN`),
+  `refund_amount` = VALUES(`refund_amount`), `refunded_at` = VALUES(`refunded_at`);
 
-INSERT INTO \`refund_items\` ($REFUND_ITEM_COLUMNS) VALUES
+INSERT INTO `refund_items` ($REFUND_ITEM_COLUMNS) VALUES
 $REFUND_ITEM_VALUES
 ON DUPLICATE KEY UPDATE
-  \`refund_id\` = VALUES(\`refund_id\`), \`order_item_id\` = VALUES(\`order_item_id\`),
-  \`$REFUND_ITEM_AMOUNT_COLUMN\` = VALUES(\`$REFUND_ITEM_AMOUNT_COLUMN\`);
+  `refund_id` = VALUES(`refund_id`), `order_item_id` = VALUES(`order_item_id`),
+  `$REFUND_ITEM_AMOUNT_COLUMN` = VALUES(`$REFUND_ITEM_AMOUNT_COLUMN`);
 
 COMMIT;
 SQL
+)"
+  HEREDOC_SQL="${HEREDOC_SQL//__YESTERDAY__/$YESTERDAY}"
+  HEREDOC_SQL="${HEREDOC_SQL//__TWO_DAYS_AGO__/$TWO_DAYS_AGO}"
+  HEREDOC_SQL="${HEREDOC_SQL//__THREE_DAYS_AGO__/$THREE_DAYS_AGO}"
+  HEREDOC_SQL="${HEREDOC_SQL//__SEVEN_DAYS_AGO__/$SEVEN_DAYS_AGO}"
+  # Substitute the schema-compatibility column names. The heredoc is
+  # quoted so the `$VAR` text below is literal; we replace the whole
+  # back-tick-quoted token in one go.
+  HEREDOC_SQL="${HEREDOC_SQL//\`\$USER_ID_COLUMN\`/$USER_ID_COLUMN}"
+  HEREDOC_SQL="${HEREDOC_SQL//\`\$ORDER_BUYER_COLUMN\`/$ORDER_BUYER_COLUMN}"
+  HEREDOC_SQL="${HEREDOC_SQL//\`\$REFUND_STATUS_COLUMN\`/$REFUND_STATUS_COLUMN}"
+  HEREDOC_SQL="${HEREDOC_SQL//\`\$REFUND_ITEM_AMOUNT_COLUMN\`/$REFUND_ITEM_AMOUNT_COLUMN}"
+  # Substitute the multi-row VALUES blocks captured into shell vars.
+  HEREDOC_SQL="${HEREDOC_SQL//\$ORDER_ITEM_COLUMNS/$ORDER_ITEM_COLUMNS}"
+  HEREDOC_SQL="${HEREDOC_SQL//\$ORDER_ITEM_VALUES/$ORDER_ITEM_VALUES}"
+  HEREDOC_SQL="${HEREDOC_SQL//\$REFUND_COLUMNS/$REFUND_COLUMNS}"
+  HEREDOC_SQL="${HEREDOC_SQL//\$REFUND_VALUES/$REFUND_VALUES}"
+  HEREDOC_SQL="${HEREDOC_SQL//\$REFUND_ITEM_COLUMNS/$REFUND_ITEM_COLUMNS}"
+  HEREDOC_SQL="${HEREDOC_SQL//\$REFUND_ITEM_VALUES/$REFUND_ITEM_VALUES}"
+  run_mysql --default-character-set=utf8mb4 <<<"$HEREDOC_SQL"
+
 
   info "$SEED_VERSION 写入完成"
   printf '固定 seed 行使用稳定 ID；非 seed 数据未删除。\n'

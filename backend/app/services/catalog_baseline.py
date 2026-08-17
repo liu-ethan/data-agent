@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import json
-import re
 import math
+import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 from ..errors import RuntimeAgentError
 from ..models import (
-    CatalogField, CatalogObject, CoverageResult, CoverageStatus, GroundedContext,
-    JoinPath, PermissionContext, SchemaGap, TaskFrame,
+    CatalogField,
+    CatalogObject,
+    CoverageResult,
+    CoverageStatus,
+    GroundedContext,
+    JoinPath,
+    PermissionContext,
+    SchemaGap,
+    TaskFrame,
 )
 
 CATALOG_VERSION = "catalog_v1"
@@ -123,11 +129,11 @@ class CatalogRetrievalService:
 
     def retrieve(self, task: TaskFrame, permission: PermissionContext,
                  schema_gap: SchemaGap | None = None,
-                 existing_context_id: str | None = None) -> tuple[GroundedContext, CoverageResult]:
+                 existing_context_id: str | None = None,
+                 existing_context: GroundedContext | None = None) -> tuple[GroundedContext, CoverageResult]:
         if permission.scope_mode.value == "NONE":
             raise RuntimeAgentError("PERMISSION_DENIED", "No data scope is available")
         query = schema_gap.narrow_query if schema_gap else task.question
-        allowed = set(permission.allowed_shop_ids)
         sensitive_request = any(term in query.lower() for term in ("phone", "手机号", "id_number", "身份证"))
         # Permission filtering occurs before scoring/reranking. The catalog itself
         # has no shop rows, so a non-empty scope permits trade objects while the
@@ -160,7 +166,6 @@ class CatalogRetrievalService:
                     source_id=r.source_id, domain=r.domain, score=round(s, 4),
                     permission_policy_version=permission.policy_version,
                     retrieval_method=self.retrieval_method) for r, s in candidates]
-        object_ids = {o.object_id for o in objects}
         fields: list[CatalogField] = []
         for record, score in candidates:
             count = 0
@@ -204,7 +209,9 @@ class CatalogRetrievalService:
         while _estimate_tokens(payload) > self.max_tokens and fields:
             fields.pop()
             payload["fields"] = [f.model_dump() for f in fields]
-        context = GroundedContext(context_id=existing_context_id or f"ctx_{uuid4().hex[:12]}",
+        context_id = existing_context_id or (
+            existing_context.context_id if existing_context else None)
+        context = GroundedContext(context_id=context_id or f"ctx_{uuid4().hex[:12]}",
             catalog_version=self.catalog_version, objects=objects, fields=fields, metrics=metrics,
             join_paths=joins, coverage=status, token_count=_estimate_tokens(payload),
             permission_policy_version=permission.policy_version)

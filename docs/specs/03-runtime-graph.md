@@ -47,38 +47,49 @@
   "request_id": "req_1008",
   "user_id": "u_east_user",
   "status": "RUNNING",
-  "task_frame": {},
-  "context_frame": {},
+  "task_frame": null,
+  "previous_task_frame": null,
+  "context_frame": null,
   "grounded_context_id": null,
+  "grounded_context": null,
   "coverage": "UNKNOWN",
   "schema_gap": null,
   "query_plan_id": null,
+  "query_plan": null,
   "result_ids": [],
   "artifact_ids": [],
   "latest_observation": null,
-  "goal_checklist": {},
+  "previous_query_error": null,
   "next_action": "RETRIEVE",
-  "pending_interrupt": null,
+  "goal_checklist": {},
   "budgets": {
     "iterations_used": 0,
-    "retrieval_rounds_used": 0
+    "retrieval_rounds_used": 0,
+    "query_retries_used": 0,
+    "max_iterations": 6,
+    "max_retrieval_rounds": 2
   },
   "action_history": [],
+  "last_action_fingerprint": null,
+  "pending_interrupt": null,
+  "messages": [],
+  "trace_id": null,
+  "model_traces": [],
   "schema_version": "agent_state_v1"
 }
 ```
 
-`status` 为 `RUNNING`、`WAITING_FOR_USER`、`SUCCEEDED`、`FAILED`、`REJECTED` 或 `TIMEOUT`。`pending_interrupt` 在 M3 必须为 `null`；M5 才允许持久化和恢复 Interrupt。
+`status` 为 `RUNNING`、`WAITING_FOR_USER`、`SUCCEEDED`、`FAILED`、`REJECTED` 或 `TIMEOUT`。`pending_interrupt` 在 M3 必须为 `null`；M5 才允许持久化和恢复 Interrupt。`model_traces` 记录每次 LLM 调用的输入 token、输出 token、模型名称和耗时,只在前端调试面板可见。`last_action_fingerprint` 只用于检测无进展的重复 Action，不进入 Prompt 或 SSE。
 
 ## 6. 条件边不变量
 
-- Coverage 不是 `SUFFICIENT` 时禁止进入 `GENERATE`。
+- Coverage 不是 `SUFFICIENT` 时禁止进入 `GENERATE`。`query_generation_node` 在 Coverage 非 `SUFFICIENT` 时必须拒绝，不能只依赖 `agent_node`。
 - SQL 未通过 Gateway 时不能产生成功 `ResultObservation`。
-- `GoalChecklist` 未完成时不能直接 END。
+- `GoalChecklist` 未完成时不能直接 END。`DATA_QUERY` 在 `query_executed` 为假时，`response_node` 不得进入 `SUCCEEDED` / `END`。
 - 达到 6 轮、2 次召回或 30 秒预算后必须澄清或返回已完成部分。
-- 连续相同 Action 和参数时终止循环。
-- 空结果不能自动扩大时间或删除用户过滤。
-- 权限失败立即终止。
+- 连续相同 Action 和参数时终止循环。参数指纹为 Action + Coverage + `query_plan_id` + SchemaGap 概念 + Observation 状态；无进展的重复 `RETRIEVE` / `GENERATE` / `EXECUTE` 立即 `FAIL`。
+- 空结果不能自动扩大时间或删除用户过滤；`EMPTY` 只能进入 `RESPOND`。
+- 权限失败立即终止。`PERMISSION_DENIED`、`SQL_FORBIDDEN_OPERATION`、`SQL_OBJECT_NOT_ALLOWED` 和 Reader 账号错误不得进入 GENERATE 重试。
 
 固定路由：
 
@@ -159,11 +170,37 @@ SSE 事件最小结构：
 
 ## 10. 测试证据
 
-- Graph 路由单元测试。
-- 预算终止测试。
-- Gateway 失败后的响应测试。
-- SSE 事件契约测试。
-- 10 条端到端 Golden Case。
+- Graph 路由单元测试 (`tests/test_graph.py`)。
+- 预算终止测试 (`tests/test_graph.py::test_agent_iteration_budget_is_enforced`)。
+- 时间解析和 Driver 占位符测试 (`tests/test_graph.py::test_today_time_range_and_driver_placeholders_are_canonicalized`)。
+- Gateway 可重试错误只 GENERATE 一次 (`tests/test_runtime_graph_spec03.py::test_retryable_gateway_error_retries_generate_once`)。
+- SSE 事件契约测试 (`tests/test_graph.py::test_sse_runtime_uses_only_the_documented_terminal_event`)。
+- 10 条端到端 Golden Case (`tests/eval_cases/core.json`)。
 - `tests/test_llm.py`：Anthropic/OpenAI 线协议、thinking 隔离、Token/Cache 用量、超时、429 重试、401 立即失败和结构化响应失败。
 - `tests/test_query_grounding.py`：未受信表、字段、指标和不一致结构化草案在 Gateway 之前被拒绝。
 - `tests/test_graph.py::test_llm_agent_runs_typed_grounded_query_and_evidence_bound_answer`：TaskFrame、Grounded QueryPlan、ReadGateway 和 result_id 证据回答的完整链路。
+- `tests/test_graph.py::test_langgraph_persists_sse_events_before_the_run_finishes`：SSE 事件持久化。
+- `tests/test_graph.py::test_waiting_thread_resumes_after_runtime_process_restart`：WAITING_FOR_USER 状态恢复。
+- Spec 03 §6 不变量 (`tests/test_runtime_graph_spec03.py`)：Coverage 禁止 GENERATE、GoalChecklist 禁止 END、相同 Action 循环终止、空结果不扩条件、权限失败立即 REJECTED。
+
+## 11. 模块拆分 (M3 重构后)
+
+`backend/app/graph/` 下的模块按职责单一原则拆分:
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `main_graph.py` | ~280 | RuntimeGraph 类、graph 构建、路由、run 循环、错误处理、终态判定 |
+| `state.py` | ~80 | LLM 契约结构 (TaskUnderstanding, QueryDraft, AnswerDraft 等) |
+| `_time_parser.py` | ~70 | 确定性相对时间解析 (昨天/今天/最近 N 天/本月) |
+| `_sql_canonicalizer.py` | ~30 | Driver 占位符规范化 (%(name)s → :name) |
+| `_query_normalizer.py` | ~140 | QueryDraft → QueryPlan 或 SchemaGap,含 metric 名映射和 PAID 过滤注入 |
+| `_task_understanding.py` | ~110 | LLM 意图识别 + TaskFrame 组装 |
+| `_events.py` | ~80 | SSE 事件发射 + 状态 checkpoint 持久化 |
+| `_thread_title.py` | ~80 | 线程标题 fire-and-forget 生成 |
+| `nodes/agent.py` | ~130 | 5 个 Action 之间的条件边决策、循环指纹、权限立即终止 |
+| `nodes/retrieval.py` | ~57 | SchemaGap 重召回 |
+| `nodes/query_generation.py` | ~115 | Grounded QueryPlan + candidate SQL 生成 |
+| `nodes/execution_gateway.py` | ~35 | ReadGateway 调用 (唯一执行入口) |
+| `nodes/response.py` | ~190 | 结果摘要回答 + artifact 创建；DATA_QUERY 未执行查询不得 END |
+
+每个模块独立可测;LLM 提示词、metric 名映射、SQL 规范化等可独立修改而不影响其它模块。

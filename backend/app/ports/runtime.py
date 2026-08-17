@@ -9,8 +9,15 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from ..models import (CoverageResult, GroundedContext, PermissionContext,
-                      QueryPlan, ResultObservation, SchemaGap, TaskFrame)
+from ..models import (
+    CoverageResult,
+    GroundedContext,
+    PermissionContext,
+    QueryPlan,
+    ResultObservation,
+    SchemaGap,
+    TaskFrame,
+)
 
 
 class DataQueryPort(Protocol):
@@ -36,6 +43,7 @@ class CatalogRetrievalPort(Protocol):
         permission: PermissionContext,
         schema_gap: SchemaGap | None = None,
         existing_context_id: str | None = None,
+        existing_context: GroundedContext | None = None,
     ) -> tuple[GroundedContext, CoverageResult] | Any: ...
 
 

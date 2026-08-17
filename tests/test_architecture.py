@@ -9,7 +9,6 @@ from pathlib import Path
 from backend.app.gateways import ReadGateway
 from backend.app.graph import RuntimeGraph
 
-
 APP = Path(__file__).parents[1] / "backend" / "app"
 
 
@@ -21,7 +20,10 @@ def test_required_runtime_layers_exist_and_flat_implementations_are_gone():
         "gateways/read_gateway.py",
         "services/catalog_retrieval.py",
         "services/permission.py",
-        "memory/stores.py",
+        "memory/references.py",
+        "memory/prompt_context.py",
+        "memory/summary.py",
+        "memory/preferences.py",
         "repositories/data.py",
         "repositories/runtime.py",
         "models/contracts.py",

@@ -6,7 +6,10 @@ from pydantic import ValidationError
 from backend.app.errors import RuntimeAgentError
 from backend.app.graph.state import AnswerDraft, QueryDraft, TaskUnderstanding
 from backend.app.models import (
-    CatalogField, CatalogObject, CoverageStatus, GroundedContext,
+    CatalogField,
+    CatalogObject,
+    CoverageStatus,
+    GroundedContext,
 )
 from backend.app.services.query_grounding import GroundingValidator
 

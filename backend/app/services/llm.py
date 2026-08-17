@@ -198,10 +198,10 @@ class StructuredLLM:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def __aenter__(self) -> "StructuredLLM":
+    async def __aenter__(self) -> StructuredLLM:
         return self
 
-    async def __aexit__(self, *_: Any) -> None:
+    async def __aexit__(self, *_: object) -> None:
         await self.aclose()
 
     async def structured(

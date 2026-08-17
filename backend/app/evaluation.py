@@ -1,5 +1,13 @@
-"""Reproducible task-level evaluation and JSON/CSV report generation."""
+"""Reproducible task-level evaluation and JSON/CSV report generation.
 
+Owned by spec 07 (Evaluation and Release). This module lives under
+``backend/app`` only because tests historically imported it from there;
+the spec 07 review is expected to relocate it to ``scripts/`` or
+``backend/app/evaluation/`` and to split the in-process harness from
+the production evaluator. It is out of scope for spec 00 and is only
+present here to keep the test-double evaluation path working until
+spec 07 lands its refactor.
+"""
 from __future__ import annotations
 
 import csv
@@ -10,9 +18,12 @@ from pathlib import Path
 from typing import Any
 
 from .graph import RuntimeGraph
-from .services.catalog_baseline import (CatalogRetrievalService, SyntheticCatalogRetrievalService,
-                      generate_synthetic_metadata)
 from .models import PermissionContext, QueryPlan, QuerySpec, TaskFrame
+from .services.catalog_baseline import (
+    CatalogRetrievalService,
+    SyntheticCatalogRetrievalService,
+    generate_synthetic_metadata,
+)
 from .testing import build_test_gateway, build_test_permission
 
 

@@ -1,13 +1,26 @@
-"""Checkpoint, artifact, reference and long-term memory abstractions."""
+"""Checkpoint, artifact, reference and long-term memory abstractions.
 
-from .stores import (ArtifactStore, CheckpointStore, PromptContextBuilder,
-                     ReferenceResolver, SQLAlchemyCheckpointStore, UserMemoryStore)
+Durable MySQL persistence lives in ``repositories.runtime.RuntimePersistence``.
+This package only holds the deterministic memory services that Graph nodes
+call: reference resolution, prompt projection, rolling summaries and
+preference overlay.
+"""
+
+from .preferences import (
+    apply_preferences,
+    extract_explicit_conditions,
+    is_long_term_preference_request,
+)
+from .prompt_context import PromptContextBuilder
+from .references import ReferenceResolver, ResolvedReference
+from .summary import RollingSummaryBuilder
 
 __all__ = [
-    "ArtifactStore",
-    "CheckpointStore",
     "PromptContextBuilder",
     "ReferenceResolver",
-    "SQLAlchemyCheckpointStore",
-    "UserMemoryStore",
+    "ResolvedReference",
+    "RollingSummaryBuilder",
+    "apply_preferences",
+    "extract_explicit_conditions",
+    "is_long_term_preference_request",
 ]

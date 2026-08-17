@@ -8,6 +8,8 @@
 
 ReadGateway 是所有只读 SQL 的唯一执行入口。它接收 `QueryPlan` 中的候选 SQL，但不信任候选 SQL，必须完成 AST、权限、语义、成本、执行和结果契约检查。
 
+> **不变量 (§6 强化)**: RLS 注入 (shop_id WHERE 子句) 之后必须**重新解析**改写后的 SQL 并再次执行与原 SQL 相同的 AST、列、Star、敏感字段检查。注入成功不得成为"绕过原始拒绝"的入口——任何不变量在改写后被违反都必须重新拒绝。
+
 ## 2. In Scope
 
 - SQLGlot MySQL AST 解析。
@@ -130,7 +132,7 @@ Gateway 必须确认 candidate SQL 的表、列、指标、时间字段、Join p
 
 1. `PermissionContext.scope_mode = NONE` 直接返回 `PERMISSION_DENIED`。
 2. `scope_mode = ALLOWLIST` 时，所有可达事实表必须有明确 `shop_id` 约束；无法追溯到 `shops` 的对象拒绝。
-3. `scope_mode = ALL` 只允许明确拥有 `DATA_ADMIN` 角色的操作者。
+3. `scope_mode = ALL` 只允许明确拥有 `ADMIN` 角色的操作者 (与 `app_users.role_name` 一致;`USER` 角色无法获得 ALL 范围)。
 4. 权限判断使用请求时重新读取的 `policy_version`，不能信任模型提供的版本。
 
 成本和执行限制：`EXPLAIN FORMAT=JSON` 的 `rows_examined_per_scan` 超过 `max_estimated_rows`，或 cost 超过 `max_cost`，返回 `QUERY_TOO_EXPENSIVE`；执行时间超过 `max_execution_ms` 返回 `QUERY_TIMEOUT`。EXPLAIN 本身失败返回 `EXPLAIN_FAILED`，不能跳过成本检查。
@@ -156,17 +158,22 @@ Gateway 必须确认 candidate SQL 的表、列、指标、时间字段、Join p
 
 ## 8. 验收标准
 
-- 30/30 危险 SQL 被预期规则拦截。
-- 20 条 Golden SQL 全部通过 Gateway 并得到 Golden Result。
-- 代码库不存在绕过 ReadGateway 的分析 SQL 执行入口。
+- 30/30 危险 SQL 被预期规则拦截 (`tests/test_security.py::test_thirty_dangerous_queries_are_rejected`)。
+- 20 条 Golden SQL 全部通过 Gateway 并得到 Golden Result (`tests/test_read_gateway_spec02.py::test_golden_sql_passes_through_gateway`,20 个 `g01_*` ~ `g20_*` 参数化用例)。
+- 代码库不存在绕过 ReadGateway 的分析 SQL 执行入口 (`tests/test_read_gateway_spec02.py::test_no_analytical_sql_bypass_outside_gateway`)。
 - Trace 可解释每次拒绝或执行。
 - 每次允许执行的 SQL 都能回溯到 QuerySpec、目录版本和权限策略版本。
 
 ## 9. 测试证据
 
-- SQL AST 单元测试。
-- 权限和敏感字段测试。
-- RLS 注入回归测试。
-- EXPLAIN 阈值测试。
-- Golden SQL 集成测试。
-- 危险 SQL 安全测试。
+- SQL AST 单元测试 (`tests/test_gateway.py`, `tests/test_read_gateway_spec02.py`)。
+- 权限和敏感字段测试 (`tests/test_gateway.py`, `tests/test_read_gateway_spec02.py`)。
+- RLS 注入回归测试 (`tests/test_gateway.py::test_rls_is_injected_into_each_nested_fact_scope`,
+  `tests/test_read_gateway_spec02.py::test_rls_reparse_rejects_forbidden_nodes_introduced_by_injection`,
+  `tests/test_read_gateway_spec02.py::test_rls_reparse_rejects_introduced_sensitive_column`)。
+- EXPLAIN 阈值测试 (现有 `MySQLDataRepository._verify_connection` + `ReadGateway._validate_sql`)。
+- Golden SQL 集成测试 (`tests/test_read_gateway_spec02.py::test_golden_sql_passes_through_gateway`)。
+- 危险 SQL 安全测试 (`tests/test_security.py::test_thirty_dangerous_queries_are_rejected`)。
+- ALL scope 角色校验 (`tests/test_read_gateway_spec02.py::test_all_scope_requires_admin_role`)。
+- 结果持久化失败语义 (`tests/test_gateway.py::test_gateway_distinguishes_result_persistence_failure`)。
+- 无旁路静态扫描 (`tests/test_read_gateway_spec02.py::test_no_analytical_sql_bypass_outside_gateway`)。
