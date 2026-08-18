@@ -4,7 +4,8 @@ function sse(items: Array<{id: number; event: string; data: unknown}>) {
   return items.map(item => `id: ${item.id}\nevent: ${item.event}\ndata: ${JSON.stringify(item.data)}\n\n`).join('')
 }
 
-async function mockWorkbench(page: Page, mode: 'complete' | 'interrupt' | 'empty' = 'complete') {
+async function mockWorkbench(page: Page, mode: 'complete' | 'interrupt' | 'write' | 'empty' = 'complete') {
+  const deleted = new Set<string>()
   await page.route('**/api/**', async route => {
     const request = route.request()
     const url = new URL(request.url())
@@ -17,7 +18,15 @@ async function mockWorkbench(page: Page, mode: 'complete' | 'interrupt' | 'empty
       return route.fulfill({json: {values: {timezone: body.value}, schema_version: 'user_preferences_v1'}})
     }
     if (path === '/api/settings') return route.fulfill({json: {values: {timezone: 'Asia/Shanghai'}, schema_version: 'user_preferences_v1'}})
-    if (path === '/api/threads') return route.fulfill({json: {items: [{thread_id: 'thread-old', title: '昨天各品类 GMV', updated_at: '2026-08-16T08:00:00Z'}]}})
+    if (request.method() === 'DELETE' && path.startsWith('/api/threads/')) {
+      deleted.add(decodeURIComponent(path.slice('/api/threads/'.length)))
+      return route.fulfill({status: 204, body: ''})
+    }
+    if (path === '/api/threads') {
+      const items = [{thread_id: 'thread-old', title: '昨天各品类 GMV', updated_at: '2026-08-16T08:00:00Z'}]
+        .filter(item => !deleted.has(item.thread_id))
+      return route.fulfill({json: {items}})
+    }
     if (path === '/api/chat/stream') {
       const events = mode === 'interrupt'
         ? [{
@@ -30,6 +39,33 @@ async function mockWorkbench(page: Page, mode: 'complete' | 'interrupt' | 'empty
             },
           },
         }]
+        : mode === 'write'
+          ? [{
+            id: 1, event: 'interrupt.created',
+            data: {
+              event: 'interrupt.created', request_id: 'request-1', thread_id: 'thread-1', status: 'WAITING_FOR_USER', state_version: 5,
+              interrupt: {
+                status: 'WAITING_FOR_USER', reason: 'WRITE_APPROVAL',
+                question: '确认将 products.product_id=prod_1001 从 智能手机 改为 新智能手机？预计影响 1 行。',
+                candidates: ['确认执行', '取消'],
+                resume_node: 'execution_gateway_node', checkpoint_id: 'ckpt-w', interrupt_id: 'interrupt-1',
+                expires_at: '2026-08-16T10:15:00Z', schema_version: 'interrupt_v1',
+                preview: {
+                  preview_id: 'preview-1', operation: 'UPDATE', target: 'products.product_id=prod_1001',
+                  diff: {product_name: {before: '智能手机', after: '新智能手机'}},
+                  estimated_affected_rows: 1, risk_level: 'MEDIUM', expires_at: '2026-08-16T12:30:00+08:00',
+                  data_version: 'products_v18', permission_policy_version: 'policy_v2',
+                  mutation_spec: {
+                    operation: 'UPDATE', table: 'products', filters: {product_id: 'prod_1001'},
+                    changes: {product_name: '新智能手机'}, user_reason: '修正商品名称',
+                    request_id: 'req-w', user_id: 'u_demo_admin', permission_policy_version: 'policy_v2',
+                    data_version: 'products_v18', idempotency_key: 'mut-w',
+                  },
+                  schema_version: 'mutation_preview_v1',
+                },
+              },
+            },
+          }]
         : mode === 'empty'
           ? [
             {id: 1, event: 'run.started', data: {event: 'run.started', request_id: 'request-1', thread_id: 'thread-1', status: 'RUNNING'}},
@@ -43,7 +79,12 @@ async function mockWorkbench(page: Page, mode: 'complete' | 'interrupt' | 'empty
       return route.fulfill({status: 200, contentType: 'text/event-stream', body: sse(events)})
     }
     if (path.includes('/interrupts/interrupt-1/resume')) {
-      return route.fulfill({json: {request_id: 'resume-1', thread_id: 'thread-1', status: 'SUCCEEDED', answer: '已按金额退款率计算。', result_ids: [], artifact_ids: [], events: [], state_version: 8}})
+      return route.fulfill({json: {
+        request_id: 'resume-1', thread_id: 'thread-1',
+        status: 'SUCCEEDED',
+        answer: mode === 'write' ? '已确认并更新 products.product_id=prod_1001，影响 1 行。' : '已按金额退款率计算。',
+        result_ids: [], artifact_ids: [], events: [], state_version: 8,
+      }})
     }
     if (path === '/api/results/result-1') {
       const offset = Number(url.searchParams.get('offset') ?? 0)
@@ -78,6 +119,17 @@ test('desktop analyst can query, inspect evidence and download governed results'
   await page.screenshot({path: 'test-results/workbench-desktop.png', fullPage: true})
 })
 
+test('write approval interrupt shows preview diff and confirms exactly once', async ({page}) => {
+  await mockWorkbench(page, 'write')
+  await login(page)
+  await page.getByRole('textbox', {name: '问题'}).fill('把商品 prod_1001 的名称改成 新智能手机')
+  await page.getByRole('button', {name: '发送'}).click()
+  await expect(page.getByLabel('写入预览')).toBeVisible()
+  await expect(page.getByRole('cell', {name: '智能手机'})).toBeVisible()
+  await page.getByRole('button', {name: '确认执行'}).click()
+  await expect(page.getByText('已确认并更新 products.product_id=prod_1001，影响 1 行。')).toBeVisible()
+})
+
 test('clarification interrupt resumes exactly from the visible choice', async ({page}) => {
   await mockWorkbench(page, 'interrupt')
   await login(page)
@@ -104,6 +156,22 @@ test('mobile layout collapses the sidebar and keeps composer usable', async ({pa
   await expect(page.getByText('问题 A')).toBeVisible()
   await expect(page.getByRole('button', {name: '证据栏'})).toBeVisible()
   await page.screenshot({path: 'test-results/workbench-mobile.png', fullPage: true})
+})
+
+test('sidebar can delete a recent thread', async ({page}) => {
+  await mockWorkbench(page)
+  await login(page)
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', {name: '删除 昨天各品类 GMV'}).click()
+  await expect(page.getByRole('button', {name: '昨天各品类 GMV'})).toHaveCount(0)
+})
+
+test('refresh keeps the analyst on the workbench', async ({page}) => {
+  await mockWorkbench(page)
+  await login(page)
+  await page.reload()
+  await expect(page.getByRole('textbox', {name: '问题'})).toBeEditable()
+  await expect(page).not.toHaveURL(/\/login/)
 })
 
 test('confirmed timezone preference remains explicit in settings', async ({page}) => {

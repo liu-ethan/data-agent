@@ -6,11 +6,13 @@ export function ThreadList({
   current,
   onOpen,
   onNew,
+  onDelete,
 }: {
   threads: ThreadSummary[]
   current?: string
   onOpen: (id: string) => void
   onNew: () => void
+  onDelete: (id: string) => void
 }) {
   const [query, setQuery] = useState('')
   const visible = useMemo(() => {
@@ -39,16 +41,29 @@ export function ThreadList({
           : visible.map(thread => {
               const active = thread.thread_id === current
               return (
-                <button
+                <div
                   key={thread.thread_id}
-                  type="button"
-                  className={active ? 'thread-item active' : 'thread-item'}
-                  onClick={() => onOpen(thread.thread_id)}
-                  aria-current={active ? 'page' : undefined}
+                  className={active ? 'thread-row active' : 'thread-row'}
                 >
-                  <span className="thread-item-title">{thread.title}</span>
-                  <time className="thread-item-time">{formatRelative(thread.updated_at)}</time>
-                </button>
+                  <button
+                    type="button"
+                    className="thread-item"
+                    onClick={() => onOpen(thread.thread_id)}
+                    aria-current={active ? 'page' : undefined}
+                    aria-label={thread.title}
+                  >
+                    <span className="thread-item-title">{thread.title}</span>
+                    <time className="thread-item-time">{formatRelative(thread.updated_at)}</time>
+                  </button>
+                  <button
+                    type="button"
+                    className="thread-delete"
+                    aria-label={`删除 ${thread.title}`}
+                    onClick={() => onDelete(thread.thread_id)}
+                  >
+                    删除
+                  </button>
+                </div>
               )
             })}
       </nav>

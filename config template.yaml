@@ -19,7 +19,7 @@ app:
 
 server:
   cors:
-    allowed_methods: [GET, POST, OPTIONS]
+    allowed_methods: [GET, POST, DELETE, OPTIONS]
     allowed_headers: [Authorization, Content-Type, X-Request-ID, Last-Event-ID]
     allow_credentials: false
     max_age_seconds: 600

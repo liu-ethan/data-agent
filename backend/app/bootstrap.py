@@ -13,11 +13,12 @@ from typing import Any
 from .auth import JWTAuthenticator
 from .config import Settings
 from .errors import RuntimeAgentError
-from .gateways import ReadGateway
+from .gateways import ReadGateway, WriteGateway
 from .graph import RuntimeGraph
 from .repositories.catalog import MySQLCatalogRepository
 from .repositories.catalog_index import MilvusCatalogIndex
 from .repositories.data import MySQLDataRepository
+from .repositories.mutation import MySQLMutationRepository
 from .repositories.runtime import PersistentResultRepository, RuntimePersistence
 from .services.catalog_retrieval import LLMReranker, ProductionCatalogRetrievalService
 from .services.embedding import build_embedder
@@ -72,6 +73,12 @@ def build_runtime_container(settings: Settings) -> RuntimeContainer:
         results=PersistentResultRepository(persistence),
         settings=settings.read_query,
     )
+    writer = MySQLMutationRepository(settings.mysql)
+    write_gateway = WriteGateway(
+        data=writer,
+        auditor=persistence,
+        settings=settings.raw.get("write_query", {}),
+    )
     llm = StructuredLLM(settings.raw.get("llm", {}))
     catalog_repository = MySQLCatalogRepository(persistence)
     catalog_index: MilvusCatalogIndex | None = None
@@ -113,6 +120,7 @@ def build_runtime_container(settings: Settings) -> RuntimeContainer:
         settings=settings.raw,
         retrieval=retrieval,
         gateway=gateway,
+        write_gateway=write_gateway,
         llm=llm,
         persistence=persistence,
     )

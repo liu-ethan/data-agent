@@ -257,10 +257,9 @@ def run_cases(
     golden_path = Path(golden_dir)
     outcomes = [_run_case(case, graph, golden_path) for case in cases]
     filter_note = (
-        "test_double runnable cases; deferred spec 06 HITL excluded; "
-        "not a production Task Completion Rate"
+        "test_double runnable cases; not a production Task Completion Rate"
         if execution_mode != "production_runtime"
-        else "runnable cases; deferred spec 06 HITL excluded"
+        else "runnable cases"
     )
     metrics = summarize_metrics(outcomes, filter_note=filter_note)
     failures = [

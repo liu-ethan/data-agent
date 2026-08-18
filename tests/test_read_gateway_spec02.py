@@ -344,11 +344,13 @@ _RAW_SQL_PATTERN = re.compile(
 def test_no_analytical_sql_bypass_outside_gateway():
     """No module under backend/app/ except the gateway, control-plane
     services and runtime repositories may execute a SELECT/WITH statement
-    directly. Analytical data is reached only through ReadGateway."""
+    directly. Analytical data is reached only through ReadGateway; write
+    preview/identity checks go through WriteGateway's mutation adapter."""
     allowed_paths = {
         Path("backend/app/gateways/read_gateway.py"),
         Path("backend/app/services/permission.py"),       # control plane
         Path("backend/app/repositories/data.py"),         # reader verification
+        Path("backend/app/repositories/mutation.py"),     # writer identity / preview
         Path("backend/app/repositories/runtime.py"),      # control plane
         Path("backend/app/repositories/catalog.py"),      # control plane
         Path("backend/app/services/schema_catalog.py"),   # indexer only

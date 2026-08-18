@@ -85,7 +85,7 @@ def create_app(settings: Settings | None = None,
     cors = settings.server.get("cors", {})
     app.add_middleware(CORSMiddleware, allow_origins=settings.app.cors_origins,
         allow_credentials=bool(cors.get("allow_credentials", False)),
-        allow_methods=list(cors.get("allowed_methods", ["GET", "POST", "OPTIONS"])),
+        allow_methods=list(cors.get("allowed_methods", ["GET", "POST", "DELETE", "OPTIONS"])),
         allow_headers=list(cors.get("allowed_headers", ["Authorization", "Content-Type", "X-Request-ID", "Last-Event-ID"])), max_age=int(cors.get("max_age_seconds", 600)))
     # Registered after CORS so it sits inside the CORS wrapper; per spec 00 §7
     # every request (including /health) carries a trace_id from the middleware.
@@ -211,8 +211,12 @@ def create_app(settings: Settings | None = None,
             "allowed_keys", ["timezone", "default_shop_id", "chart_preference", "number_format"]))
         if body.key not in allowed:
             raise HTTPException(status_code=400, detail="MEMORY_KEY_NOT_ALLOWED")
-        await asyncio.to_thread(persistence.put_user_preference, identity.user_id,
-                                body.key, body.value, confirmed=body.confirmed)
+        try:
+            await asyncio.to_thread(persistence.put_user_preference, identity.user_id,
+                                    body.key, body.value, confirmed=body.confirmed)
+        except RuntimeAgentError as exc:
+            status = 400 if exc.error_code == "MEMORY_CONFIRMATION_REQUIRED" else 500
+            raise HTTPException(status_code=status, detail=exc.error_code) from exc
         return UserPreferences(values=await asyncio.to_thread(
             persistence.user_preferences, identity.user_id))
 
@@ -379,6 +383,17 @@ def create_app(settings: Settings | None = None,
         try: return ThreadDetail.model_validate(await asyncio.to_thread(persistence.thread_detail, thread_id, identity.user_id))
         except RuntimeAgentError as exc: raise HTTPException(status_code=403, detail=exc.error_code) from exc
         except KeyError as exc: raise HTTPException(status_code=404, detail="THREAD_NOT_FOUND") from exc
+
+    @app.delete("/api/threads/{thread_id}", status_code=204)
+    async def delete_thread(thread_id: str, identity: Principal = Depends(principal)) -> Response:
+        try:
+            await asyncio.to_thread(persistence.delete_thread, thread_id, identity.user_id)
+        except RuntimeAgentError as exc:
+            status = 403 if exc.error_code == "PERMISSION_DENIED" else 500
+            raise HTTPException(status_code=status, detail=exc.error_code) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="THREAD_NOT_FOUND") from exc
+        return Response(status_code=204)
 
     @app.post("/api/threads/{thread_id}/interrupts/{interrupt_id}/resume", response_model=ChatResponse)
     async def resume(thread_id: str, interrupt_id: str, body: ResumeRequest, request: Request, identity: Principal = Depends(principal)) -> ChatResponse:

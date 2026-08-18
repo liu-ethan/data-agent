@@ -313,6 +313,7 @@ class Interrupt(Contract):
     checkpoint_id: str
     interrupt_id: str
     expires_at: datetime
+    preview: MutationPreview | None = None
     schema_version: str = "interrupt_v1"
 
 
@@ -354,6 +355,9 @@ class AgentState(Contract):
     action_history: list[dict[str, Any]] = Field(default_factory=list)
     last_action_fingerprint: str | None = None
     pending_interrupt: Interrupt | None = None
+    pending_mutation: MutationSpec | None = None
+    pending_preview: MutationPreview | None = None
+    latest_mutation: MutationObservation | None = None
     messages: list[dict[str, str]] = Field(default_factory=list)
     rolling_summary: RollingSummary | None = None
     trace_id: str | None = None
@@ -589,4 +593,17 @@ class MutationPreview(Contract):
     expires_at: datetime
     data_version: str
     permission_policy_version: str
+    mutation_spec: MutationSpec
     schema_version: str = "mutation_preview_v1"
+
+
+class MutationObservation(Contract):
+    status: ResultStatus
+    preview_id: str
+    affected_rows: int = 0
+    after: dict[str, Any] = Field(default_factory=dict)
+    error_code: str | None = None
+    data_version: str
+    permission_policy_version: str
+    audit_id: str | None = None
+    schema_version: str = "mutation_observation_v1"

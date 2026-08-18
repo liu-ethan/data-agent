@@ -75,7 +75,7 @@ export function ConversationStream({
         )}
         <TraceDrawer traceId={traceId} requestId={requestId} errorCode={errorCode} />
       </div>
-      {interrupt && <InterruptPanel interrupt={interrupt} busy={busy} onResume={onResume} />}
+        {interrupt && !busy && <InterruptPanel interrupt={interrupt} busy={busy} onResume={onResume} />}
     </section>
   )
 }

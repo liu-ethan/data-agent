@@ -169,7 +169,8 @@ export interface paths {
         get: operations["thread_api_threads__thread_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Delete Thread */
+        delete: operations["thread_api_threads__thread_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -366,6 +367,67 @@ export interface components {
              * @default interrupt_v1
              */
             schema_version: string;
+            /** Preview */
+            preview?: components["schemas"]["MutationPreview"] | null;
+        };
+        /** MutationPreview */
+        MutationPreview: {
+            /** Preview Id */
+            preview_id: string;
+            /** Operation */
+            operation: string;
+            /** Target */
+            target: string;
+            /** Diff */
+            diff: Record<string, never> | {
+                [key: string]: unknown;
+            };
+            /** Estimated Affected Rows */
+            estimated_affected_rows: number;
+            /** Risk Level */
+            risk_level: "LOW" | "MEDIUM" | "HIGH";
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Data Version */
+            data_version: string;
+            /** Permission Policy Version */
+            permission_policy_version: string;
+            mutation_spec: components["schemas"]["MutationSpec"];
+            /**
+             * Schema Version
+             * @default mutation_preview_v1
+             */
+            schema_version?: string;
+        };
+        /** MutationSpec */
+        MutationSpec: {
+            /** Operation */
+            operation: "INSERT" | "UPDATE";
+            /** Table */
+            table: string;
+            /** Filters */
+            filters?: {
+                [key: string]: unknown;
+            };
+            /** Changes */
+            changes?: {
+                [key: string]: unknown;
+            };
+            /** User Reason */
+            user_reason: string;
+            /** Request Id */
+            request_id: string;
+            /** User Id */
+            user_id: string;
+            /** Permission Policy Version */
+            permission_policy_version: string;
+            /** Data Version */
+            data_version: string;
+            /** Idempotency Key */
+            idempotency_key: string;
         };
         /** ModelUsage */
         ModelUsage: {
@@ -927,6 +989,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ThreadDetail"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    thread_api_threads__thread_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -15,7 +15,7 @@ def main() -> int:
     for name in ("TaskFrame", "ContextFrame", "PermissionContext", "GroundedContext", "CoverageResult",
                  "SchemaGap", "QuerySpec", "QueryPlan", "ResultObservation", "ArtifactSpec", "AgentState",
                  "TraceContext", "AppError", "Interrupt", "RuntimeEvent", "ModelUsage",
-                 "MutationSpec", "MutationPreview"):
+                 "MutationSpec", "MutationPreview", "MutationObservation"):
         contracts[name] = getattr(models, name).model_json_schema()
     output = Path("docs/generated/contracts.json")
     output.parent.mkdir(parents=True, exist_ok=True)

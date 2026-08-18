@@ -31,7 +31,7 @@ class RollingSummaryBuilder:
                 ),
                 source="SYSTEM_OBSERVED",
             ))
-        mutation = pending_mutation
+        mutation = pending_mutation or getattr(state, "pending_mutation", None)
         if isinstance(mutation, MutationSpec):
             mutation = mutation.model_dump(mode="json")
         return RollingSummary(

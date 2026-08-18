@@ -76,6 +76,18 @@ async def response_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
             state.artifact_ids.append(artifact.artifact_id)
     elif state.latest_observation and state.latest_observation.status == ResultStatus.EMPTY:
         answer = "查询完成，但该时间范围没有符合条件的数据；空结果不等于数值 0。"
+    elif state.latest_mutation and state.latest_mutation.status == ResultStatus.SUCCESS:
+        preview = state.pending_preview
+        target = preview.target if preview else "products"
+        answer = (
+            f"已确认并更新 {target}，影响 {state.latest_mutation.affected_rows} 行。"
+        )
+        state.pending_preview = None
+        state.pending_mutation = None
+    elif state.task_frame and state.task_frame.intent == Intent.DATA_MUTATION:
+        answer = "已取消本次写入，数据未修改。"
+        state.pending_preview = None
+        state.pending_mutation = None
     elif state.latest_observation and state.latest_observation.summary:
         summary = state.latest_observation.summary.model_dump(mode="json")
         if runtime.llm:

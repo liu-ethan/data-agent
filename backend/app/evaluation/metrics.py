@@ -51,7 +51,7 @@ def metric_definitions() -> list[Metric]:
         },
         {
             "name": "hitl_resume_success",
-            "description": "write/HITL resume cases; empty while spec 06 is deferred",
+            "description": "write/HITL resume cases complete with the expected status",
         },
         {
             "name": "follow_up_resolution_accuracy",

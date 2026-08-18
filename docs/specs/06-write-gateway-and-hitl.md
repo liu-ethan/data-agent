@@ -1,6 +1,6 @@
 # Spec 06：WriteGateway 与审批 HITL
 
-状态：`Deferred`
+状态：`Implemented`
 
 对应里程碑：M6
 
@@ -103,9 +103,5 @@ Preview 必须保存完整的参数化 MutationSpec 和版本快照，不能只�
 
 ## 9. 测试证据
 
-- 权限拒绝测试。
-- 白名单测试。
-- Preview diff 测试。
-- HITL resume 测试。
-- 幂等提交测试。
-- 审计回放测试。
+- 权限拒绝、白名单、Preview diff、HITL resume、幂等提交和审计回放：`tests/test_write_gateway_spec06.py`
+- 评测 HITL 用例：`tests/eval_cases/deferred_hitl.json`（Admin 商品名更新走审批；禁止操作在审批前拒绝）

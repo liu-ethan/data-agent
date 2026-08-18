@@ -2,8 +2,8 @@ import {StrictMode, useEffect, useRef, useState} from 'react'
 import {createRoot} from 'react-dom/client'
 import type {components} from './api/schema'
 import {
-  API, ApiError, consumeSse, isChartDsl, newClientRequestId, requestJson,
-  requestRecommendedQuestions, tokenExpiry,
+  API, ApiError, consumeSse, isChartDsl, newClientRequestId, readStoredAccessToken,
+  requestJson, requestRecommendedQuestions, tokenExpiry, writeStoredAccessToken,
 } from './client'
 import {AuthPage} from './auth/AuthPage'
 import {AppShell} from './workbench/AppShell'
@@ -344,6 +344,18 @@ function Workbench({token, logout}: {token: string; logout: () => void}) {
     navigate('/app')
   }
 
+  async function deleteThread(id: string) {
+    if (!window.confirm('删除该会话后无法恢复。确定删除？')) return
+    try {
+      await requestJson(`/api/threads/${id}`, token, {method: 'DELETE'})
+      if (threadId === id) newThread()
+      await refreshThreads()
+      setError(undefined)
+    } catch (value) {
+      setError(value instanceof Error ? value.message : '会话无法删除')
+    }
+  }
+
   async function saveTimezone(value: string) {
     try {
       setPreferences(await requestJson<UserPreferences>('/api/settings', token, {
@@ -394,6 +406,7 @@ function Workbench({token, logout}: {token: string; logout: () => void}) {
         current={threadId}
         onOpen={id => void openThread(id)}
         onNew={newThread}
+        onDelete={id => void deleteThread(id)}
       />
       <ConversationStream
         messages={resultRoute ? [] : messages}
@@ -426,18 +439,22 @@ function Workbench({token, logout}: {token: string; logout: () => void}) {
 }
 
 export function Root() {
-  const [token, setToken] = useState<string>()
-  const expiry = tokenExpiry(token as string)
+  const [token, setToken] = useState<string | undefined>(() => readStoredAccessToken())
+  const expiry = token ? tokenExpiry(token) : undefined
+  function setSession(value: string | undefined) {
+    writeStoredAccessToken(value)
+    setToken(value)
+  }
   useEffect(() => {
-    if (token && expiry && expiry.getTime() <= Date.now()) setToken(undefined)
+    if (token && expiry && expiry.getTime() <= Date.now()) setSession(undefined)
   }, [token, expiry])
   useEffect(() => {
     if (!token && location.pathname !== '/login') history.replaceState({}, '', '/login')
     if (token && (location.pathname === '/' || location.pathname === '/login')) history.replaceState({}, '', '/app')
   }, [token])
   return token
-    ? <Workbench token={token} logout={() => setToken(undefined)} />
-    : <AuthPage onAuthenticated={value => setToken(value)} />
+    ? <Workbench token={token} logout={() => setSession(undefined)} />
+    : <AuthPage onAuthenticated={value => setSession(value)} />
 }
 
 const rootElement = document.getElementById('root')

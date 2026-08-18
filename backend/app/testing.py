@@ -8,25 +8,28 @@ from __future__ import annotations
 
 from typing import Any
 
-from .gateways import ReadGateway
+from .gateways import ReadGateway, WriteGateway
 from .graph import RuntimeGraph
 from .models import PermissionContext
 from .services.catalog_baseline import CatalogRetrievalService, build_permission
 from .testing_adapters import ResultRepository, SQLiteDataRepository
 
 
-def build_test_gateway(*, settings: dict[str, Any] | None = None) -> ReadGateway:
+def build_test_gateway(*, settings: dict[str, Any] | None = None,
+                       data: SQLiteDataRepository | None = None) -> ReadGateway:
     return ReadGateway(
-        data=SQLiteDataRepository(),
+        data=data or SQLiteDataRepository(),
         results=ResultRepository(),
         settings=settings,
     )
 
 
 def build_test_runtime(*, settings: dict[str, Any] | None = None,
-                       llm: Any | None = None) -> RuntimeGraph:
+                       llm: Any | None = None,
+                       data: SQLiteDataRepository | None = None) -> RuntimeGraph:
     values = settings or {}
     budget = values.get("retrieval_budget", {})
+    store = data or SQLiteDataRepository()
     retrieval = CatalogRetrievalService(
         max_objects=int(budget.get("max_object_candidates", 5)),
         max_fields=int(budget.get("max_fields_per_object", 8)),
@@ -36,7 +39,8 @@ def build_test_runtime(*, settings: dict[str, Any] | None = None,
     )
     return RuntimeGraph(
         retrieval=retrieval,
-        gateway=build_test_gateway(settings=values.get("read_query", {})),
+        gateway=build_test_gateway(settings=values.get("read_query", {}), data=store),
+        write_gateway=WriteGateway(data=store, settings=values.get("write_query", {})),
         settings=values,
         llm=llm,
     )

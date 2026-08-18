@@ -31,7 +31,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.engine import URL
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from ..auth import hash_password
 from ..errors import RuntimeAgentError
@@ -60,6 +60,11 @@ def mysql_url(mysql: dict[str, Any], account_name: str = "control", *,
 
 def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _privilege_denied(exc: SQLAlchemyError) -> bool:
+    orig = getattr(exc, "orig", None)
+    return getattr(orig, "args", [None])[0] == 1142
 
 
 class RuntimePersistence:
@@ -152,6 +157,24 @@ class RuntimePersistence:
             Column("thread_id", String(255), primary_key=True),
             Column("title", String(64), nullable=False),
             Column("generated_at", DateTime(timezone=True), nullable=False))
+        self.mutation_audits_table = Table("mutation_audit", self.metadata,
+            Column("audit_id", String(64), primary_key=True),
+            Column("user_id", String(255), nullable=False, index=True),
+            Column("request_id", String(255), nullable=False),
+            Column("preview_id", String(64), nullable=False),
+            Column("idempotency_key", String(255), nullable=False, index=True),
+            Column("operation", String(16), nullable=False),
+            Column("table_name", String(64), nullable=False),
+            Column("filters_json", Text, nullable=False),
+            Column("changes_json", Text, nullable=False),
+            Column("before_json", Text, nullable=False),
+            Column("after_json", Text, nullable=False),
+            Column("decision", String(32), nullable=False),
+            Column("status", String(32), nullable=False),
+            Column("affected_rows", Integer, nullable=False),
+            Column("data_version", String(128), nullable=False),
+            Column("permission_policy_version", String(128), nullable=False),
+            Column("created_at", DateTime(timezone=True), nullable=False))
         if create_schema:
             self.metadata.create_all(self.engine)
 
@@ -291,32 +314,52 @@ class RuntimePersistence:
                                     "long-term preferences require explicit confirmation")
         now = datetime.now(UTC)
         payload = json.dumps(value, ensure_ascii=False)
-        with self.engine.begin() as connection:
-            row = connection.execute(select(self.user_memories).where(and_(
-                self.user_memories.c.user_id == user_id,
-                self.user_memories.c.memory_key == key))).mappings().first()
-            if row:
-                version = int(row["version"]) + 1
-                connection.execute(self.user_memories.update().where(and_(
+        history: dict[str, Any] | None = None
+        try:
+            with self.engine.begin() as connection:
+                row = connection.execute(select(self.user_memories).where(and_(
                     self.user_memories.c.user_id == user_id,
-                    self.user_memories.c.memory_key == key)).values(
-                    value_json=payload, source=source, version=version,
-                    confirmed_at=now, updated_at=now))
-                memory_id = str(row["memory_id"])
-                connection.execute(self.memory_history.insert().values(
-                    history_id=f"memhist_{uuid4().hex[:16]}",
-                    memory_id=memory_id, user_id=user_id, memory_key=key,
-                    old_value_json=row["value_json"], new_value_json=payload,
-                    source=source, created_at=now))
-            else:
-                version, memory_id = 1, f"memory_{uuid4().hex[:16]}"
-                connection.execute(self.user_memories.insert().values(
-                    memory_id=memory_id, user_id=user_id, memory_key=key,
-                    value_json=payload, source=source, version=version,
-                    confirmed_at=now, expires_at=None, created_at=now, updated_at=now))
+                    self.user_memories.c.memory_key == key))).mappings().first()
+                if row:
+                    version = int(row["version"]) + 1
+                    connection.execute(self.user_memories.update().where(and_(
+                        self.user_memories.c.user_id == user_id,
+                        self.user_memories.c.memory_key == key)).values(
+                        value_json=payload, source=source, version=version,
+                        confirmed_at=now, updated_at=now))
+                    memory_id = str(row["memory_id"])
+                    history = {
+                        "memory_id": memory_id, "user_id": user_id, "memory_key": key,
+                        "old_value_json": row["value_json"], "new_value_json": payload,
+                        "source": source, "created_at": now,
+                    }
+                else:
+                    version, memory_id = 1, f"memory_{uuid4().hex[:16]}"
+                    connection.execute(self.user_memories.insert().values(
+                        memory_id=memory_id, user_id=user_id, memory_key=key,
+                        value_json=payload, source=source, version=version,
+                        confirmed_at=now, expires_at=None, created_at=now, updated_at=now))
+        except SQLAlchemyError as exc:
+            raise RuntimeAgentError(
+                "MEMORY_WRITE_FAILED", "the confirmed preference could not be saved"
+            ) from exc
+        if history is not None:
+            self._append_memory_history(history)
         return {"memory_id": memory_id, "key": key, "value": value,
                 "source": source, "version": version,
                 "confirmed_at": now.isoformat()}
+
+    def _append_memory_history(self, history: dict[str, Any]) -> None:
+        try:
+            with self.engine.begin() as connection:
+                connection.execute(self.memory_history.insert().values(
+                    history_id=f"memhist_{uuid4().hex[:16]}", **history))
+        except SQLAlchemyError as exc:
+            if _privilege_denied(exc):
+                return
+            raise RuntimeAgentError(
+                "MEMORY_WRITE_FAILED", "the confirmed preference could not be saved"
+            ) from exc
 
     def user_memory_history(self, user_id: str, key: str) -> list[dict[str, Any]]:
         with self.engine.connect() as connection:
@@ -357,6 +400,46 @@ class RuntimePersistence:
             elif row["role"] == "user" and item["title"] == "未命名分析":
                 item["title"] = str(row["content"])[:80]
         return list(threads.values())[:limit]
+
+    def delete_thread(self, thread_id: str, user_id: str) -> None:
+        state = self.load_state(thread_id)
+        try:
+            with self.engine.begin() as connection:
+                owned = connection.execute(select(self.messages.c.message_id).where(and_(
+                    self.messages.c.thread_id == thread_id, self.messages.c.user_id == user_id,
+                )).limit(1)).first()
+                if state is None and owned is None:
+                    raise KeyError(thread_id)
+                if state is not None and state.user_id != user_id:
+                    raise RuntimeAgentError("PERMISSION_DENIED", "thread owner does not match")
+                connection.execute(self.messages.delete().where(and_(
+                    self.messages.c.thread_id == thread_id, self.messages.c.user_id == user_id)))
+                if state is None or state.user_id == user_id:
+                    connection.execute(self.checkpoints.delete().where(
+                        self.checkpoints.c.thread_id == thread_id))
+                    connection.execute(self.checkpoint_history.delete().where(
+                        self.checkpoint_history.c.thread_id == thread_id))
+        except RuntimeAgentError:
+            raise
+        except KeyError:
+            raise
+        except SQLAlchemyError as exc:
+            raise RuntimeAgentError(
+                "THREAD_DELETE_FAILED", "the conversation could not be deleted"
+            ) from exc
+        self._delete_thread_title(thread_id)
+
+    def _delete_thread_title(self, thread_id: str) -> None:
+        try:
+            with self.engine.begin() as connection:
+                connection.execute(self.thread_titles.delete().where(
+                    self.thread_titles.c.thread_id == thread_id))
+        except SQLAlchemyError as exc:
+            if _privilege_denied(exc):
+                return
+            raise RuntimeAgentError(
+                "THREAD_DELETE_FAILED", "the conversation could not be deleted"
+            ) from exc
 
     def thread_detail(self, thread_id: str, user_id: str) -> dict[str, Any]:
         state = self.load_state(thread_id)
@@ -487,6 +570,94 @@ class RuntimePersistence:
                 policy_version=policy_version, created_by=created_by,
                 created_at=datetime.now(UTC), expires_at=expires_at,
                 active=1))
+
+
+    def record_mutation_audit(
+        self,
+        *,
+        user_id: str,
+        request_id: str,
+        preview_id: str,
+        idempotency_key: str,
+        operation: str,
+        table_name: str,
+        filters: dict[str, Any],
+        changes: dict[str, Any],
+        before_values: dict[str, Any],
+        after_values: dict[str, Any],
+        decision: str,
+        status: str,
+        affected_rows: int,
+        data_version: str,
+        permission_policy_version: str,
+    ) -> str:
+        audit_id = f"audit_{uuid4().hex[:16]}"
+        try:
+            with self.engine.begin() as connection:
+                connection.execute(self.mutation_audits_table.insert().values(
+                    audit_id=audit_id,
+                    user_id=user_id,
+                    request_id=request_id,
+                    preview_id=preview_id,
+                    idempotency_key=idempotency_key,
+                    operation=operation,
+                    table_name=table_name,
+                    filters_json=json.dumps(filters, ensure_ascii=False, default=str),
+                    changes_json=json.dumps(changes, ensure_ascii=False, default=str),
+                    before_json=json.dumps(before_values, ensure_ascii=False, default=str),
+                    after_json=json.dumps(after_values, ensure_ascii=False, default=str),
+                    decision=decision,
+                    status=status,
+                    affected_rows=affected_rows,
+                    data_version=data_version,
+                    permission_policy_version=permission_policy_version,
+                    created_at=datetime.now(UTC),
+                ))
+        except SQLAlchemyError as exc:
+            raise RuntimeAgentError(
+                "MUTATION_EXECUTION_FAILED",
+                "The mutation audit could not be recorded",
+            ) from exc
+        return audit_id
+
+    def ensure_mutation_audit(self) -> None:
+        try:
+            with self.engine.connect() as connection:
+                connection.execute(select(self.mutation_audits_table.c.audit_id).limit(1))
+        except SQLAlchemyError as exc:
+            raise RuntimeAgentError(
+                "MUTATION_EXECUTION_FAILED",
+                "mutation audit table is not available",
+            ) from exc
+
+    def mutation_audits(self, *, idempotency_key: str) -> list[dict[str, Any]]:
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(self.mutation_audits_table)
+                .where(self.mutation_audits_table.c.idempotency_key == idempotency_key)
+                .order_by(self.mutation_audits_table.c.created_at)
+            ).mappings().all()
+        records = []
+        for row in rows:
+            records.append({
+                "audit_id": row["audit_id"],
+                "user_id": row["user_id"],
+                "request_id": row["request_id"],
+                "preview_id": row["preview_id"],
+                "idempotency_key": row["idempotency_key"],
+                "operation": row["operation"],
+                "table_name": row["table_name"],
+                "filters": json.loads(row["filters_json"]),
+                "changes": json.loads(row["changes_json"]),
+                "before_values": json.loads(row["before_json"]),
+                "after_values": json.loads(row["after_json"]),
+                "decision": row["decision"],
+                "status": row["status"],
+                "affected_rows": row["affected_rows"],
+                "data_version": row["data_version"],
+                "permission_policy_version": row["permission_policy_version"],
+            })
+        return records
 
 
 class PersistentResultRepository:

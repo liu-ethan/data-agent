@@ -63,6 +63,20 @@ def test_runtime_event_replay_is_owner_scoped_and_idempotency_is_stable(tmp_path
     assert store.put_idempotent("request-result:u_1:req_1", {"status": "FAILED"}) == {"status": "SUCCEEDED"}
 
 
+def test_delete_thread_is_owner_scoped_and_removes_session_rows(tmp_path):
+    store = RuntimePersistence(url=f"sqlite:///{tmp_path/'delete.db'}", create_schema=True)
+    state = AgentState(thread_id="thread_1", request_id="req_1", user_id="u_1")
+    store.save_checkpoint(state, expected_state_version=-1, idempotency_key="node:req_1:first")
+    store.append_message("thread_1", "u_1", "user", "昨天 GMV")
+    with pytest.raises(RuntimeAgentError, match="thread owner"):
+        store.delete_thread("thread_1", "u_2")
+    store.delete_thread("thread_1", "u_1")
+    assert store.list_threads("u_1") == []
+    assert store.load_state("thread_1") is None
+    with pytest.raises(KeyError):
+        store.delete_thread("thread_1", "u_1")
+
+
 def test_confirmed_user_preferences_are_versioned_and_persistent(tmp_path):
     store = RuntimePersistence(url=f"sqlite:///{tmp_path/'preferences.db'}", create_schema=True)
     with pytest.raises(RuntimeAgentError, match="confirmation"):
@@ -74,3 +88,6 @@ def test_confirmed_user_preferences_are_versioned_and_persistent(tmp_path):
     assert second["memory_id"] == first["memory_id"]
     reopened = RuntimePersistence(url=f"sqlite:///{tmp_path/'preferences.db'}")
     assert reopened.user_preferences("u_1") == {"timezone": "Asia/Shanghai"}
+    history = reopened.user_memory_history("u_1", "timezone")
+    assert history[-1]["old_value"] == "UTC"
+    assert history[-1]["new_value"] == "Asia/Shanghai"

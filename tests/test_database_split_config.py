@@ -41,7 +41,7 @@ SYSTEM_TABLES = {
     "runtime_checkpoints", "runtime_idempotency", "runtime_results",
     "runtime_events", "runtime_checkpoint_history",
     "conversation_messages", "conversation_artifacts",
-    "thread_titles", "user_memories",
+    "thread_titles", "user_memories", "mutation_audit",
 }
 
 
@@ -104,6 +104,8 @@ def test_business_schema_targets_business_database():
     "006_system_checkpoint_history.sql",
     "007_system_password_auth.sql",
     "008_system_registration.sql",
+    "009_system_user_memory_history.sql",
+    "010_system_mutation_audit.sql",
 ])
 def test_system_migrations_target_system_database(migration):
     path = MIGRATIONS_DIR / migration
@@ -121,6 +123,8 @@ def test_system_migrations_target_system_database(migration):
     "006_system_checkpoint_history.sql",
     "007_system_password_auth.sql",
     "008_system_registration.sql",
+    "009_system_user_memory_history.sql",
+    "010_system_mutation_audit.sql",
 ])
 def test_system_migrations_never_create_business_tables(migration):
     path = MIGRATIONS_DIR / migration
@@ -224,6 +228,8 @@ def test_mysql_env_sh_administers_two_databases():
     assert "MYSQL_BUSINESS_DATABASE:-data_agent_ecommerce" in text
     assert "MYSQL_SYSTEM_DATABASE:-data_agent_system" in text
     assert r"GRANT SELECT, SHOW VIEW ON \`$MYSQL_BUSINESS_DATABASE\`.shops" in text
+    assert r"GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MYSQL_SYSTEM_DATABASE\`.thread_titles" in text
+    assert r"GRANT SELECT, INSERT ON \`$MYSQL_SYSTEM_DATABASE\`.user_memory_history" in text
     # The reader account must never receive a top-level grant against the system database.
     assert not re.search(r"GRANT[^;]*MYSQL_SYSTEM_DATABASE[^;]*TO\s+'\$MYSQL_READER_USER'",
                          text), "reader must not be granted anything against the system database"

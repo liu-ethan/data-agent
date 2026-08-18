@@ -14,6 +14,7 @@ file stays focused on orchestration.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import Any, TypedDict
@@ -34,6 +35,7 @@ from ..ports import (
     ReadGatewayPort,
     RuntimeStateStorePort,
     StructuredLLMPort,
+    WriteGatewayPort,
 )
 from ..services.trace import record
 from ._events import checkpoint_state, emit_event
@@ -47,6 +49,8 @@ from .nodes import (
     retrieval_node,
 )
 
+logger = logging.getLogger("data_runtime_agent")
+
 
 class _Run(TypedDict, total=False):
     state: AgentState
@@ -58,6 +62,7 @@ class _Run(TypedDict, total=False):
     event_sink: Any
     checkpoint_version: int
     model_usage: dict[str, Any]
+    mutation_decision: str
 
 
 EventSink = Callable[[dict[str, Any]], Awaitable[None] | None]
@@ -74,10 +79,12 @@ class RuntimeGraph:
         settings: dict[str, Any] | None = None,
         llm: StructuredLLMPort | None = None,
         persistence: RuntimeStateStorePort | None = None,
+        write_gateway: WriteGatewayPort | None = None,
     ) -> None:
         self.settings = settings or {}
         self.retrieval = retrieval
         self.gateway = gateway
+        self.write_gateway = write_gateway
         self.llm = llm
         self.persistence = persistence
         runtime = self.settings.get("runtime_agent", {})
@@ -242,6 +249,13 @@ class RuntimeGraph:
             )
         if checkpoint and checkpoint.state_version != expected_state_version:
             raise RuntimeAgentError("CHECKPOINT_CONFLICT", "state version has changed")
+        write_resume = (
+            resume
+            and state is not None
+            and state.pending_preview is not None
+            and state.pending_interrupt is not None
+            and state.pending_interrupt.reason == "WRITE_APPROVAL"
+        )
         if state is None:
             state = AgentState(
                 thread_id=thread_id,
@@ -249,12 +263,24 @@ class RuntimeGraph:
                 user_id=user_id,
                 budgets=self._fresh_budgets(),
             )
+            mutation_decision = None
+        elif write_resume:
+            state.request_id = request_id
+            state.status = RunStatus.RUNNING
+            mutation_decision = message
+            state.pending_interrupt = None
+            state.previous_query_error = None
+            state.last_action_fingerprint = None
+            state.budgets = self._fresh_budgets()
         else:
             original_question = state.task_frame.question if state.task_frame else ""
             state.previous_task_frame = state.task_frame
             state.request_id = request_id
             state.status = RunStatus.RUNNING
             state.pending_interrupt = None
+            state.pending_mutation = None
+            state.pending_preview = None
+            state.latest_mutation = None
             # A clarification answer changes semantic understanding. Rebuild
             # the task and grounded plan while retaining server-side history;
             # reads have no side effects and are safe to recompute.
@@ -271,16 +297,20 @@ class RuntimeGraph:
             if resume and original_question:
                 message = f"{original_question}\n用户澄清：{message}"
             state.budgets = self._fresh_budgets()
+            mutation_decision = None
         # Working state carries a bounded prompt window; full history lives
         # in MySQL.
         state.messages = [*state.messages[-7:], {"role": "user", "content": message}]
-        return {
+        opened: _Run = {
             "state": state,
             "message": message,
             "timezone_name": timezone_name,
             "permission": permission,
             "checkpoint_version": checkpoint.state_version if checkpoint else -1,
         }
+        if mutation_decision is not None:
+            opened["mutation_decision"] = mutation_decision
+        return opened
 
     def _fresh_budgets(self) -> dict[str, int]:
         return {
@@ -318,7 +348,10 @@ class RuntimeGraph:
             await self._refresh_checkpoint_version(initial, thread_id)
             state.status = (
                 RunStatus.REJECTED
-                if exc.error_code in {"PERMISSION_DENIED", "SQL_FORBIDDEN_OPERATION"}
+                if exc.error_code in {
+                    "PERMISSION_DENIED", "SQL_FORBIDDEN_OPERATION",
+                    "WRITE_FORBIDDEN", "MUTATION_STALE",
+                }
                 else RunStatus.FAILED
             )
             state.next_action = Action.FAIL
@@ -328,6 +361,7 @@ class RuntimeGraph:
         except Exception:
             # Provider/driver details stay server-side. Persist a recoverable,
             # public failure instead of allowing FastAPI to emit an HTML 500.
+            logger.exception("runtime graph failed with an unexpected error")
             await self._refresh_checkpoint_version(initial, thread_id)
             state.status = RunStatus.FAILED
             state.next_action = Action.FAIL

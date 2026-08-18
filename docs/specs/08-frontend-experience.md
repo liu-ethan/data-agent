@@ -51,6 +51,8 @@
 
 移动端将线程列表和证据栏变为抽屉；中心对话和结果区域保持主任务优先。任何固定宽度表格必须支持横向滚动，不得遮挡输入框或操作按钮。
 
+桌面端工作台铺满视口：`width/height: 100%`，页面本身不随对话或结果变长；会话列表、对话流和证据栏在栏内滚动。`< 768px` 仍为单栏加抽屉。
+
 ## 3. 页面和路由
 
 | 路由 | 能力 | MVP 状态 |
@@ -61,7 +63,7 @@
 | `/app/results/:result_id` | 查看已授权结果、分页和导出 | M3 |
 | `/app/settings` | 时区和确认后的长期偏好 | M5 |
 
-M6 之前不提供写入页面；MutationPreview 和审批 UI 在 WriteGateway 实际启用后才开放。
+M6 启用 WriteGateway 后，对话流中的 `WRITE_APPROVAL` Interrupt 展示 MutationPreview（before/after、预计影响行数）并提供确认/取消。
 
 ## 4. 前端状态契约
 
@@ -69,7 +71,7 @@ M6 之前不提供写入页面；MutationPreview 和审批 UI 在 WriteGateway �
 
 | 状态 | 保存内容 | 持久化规则 |
 | --- | --- | --- |
-| `authState` | `user_id`、角色、token 状态、过期时间 | token 不写入 URL；MVP 使用内存中的 Bearer token |
+| `authState` | `user_id`、角色、token 状态、过期时间 | token 不写入 URL；`access_token` 写入 `localStorage`，刷新或同 origin 新页面在未过期时恢复会话；登出、过期或 401 时清除 |
 | `threadState` | `thread_id`、消息、当前 `request_id`、运行状态 | 消息来自 API；不能把完整 SQL 结果复制进状态 |
 | `runState` | 当前 Node、Action、预算、错误、SSE 连接状态 | 由 SSE 事件增量更新；断线后按 `request_id` 重连或显示恢复入口 |
 | `artifactState` | `result_id`、`artifact_id`、类型、过期状态、分页游标 | 只保存引用和摘要；读取前重新经过后端权限校验 |
@@ -87,6 +89,7 @@ M6 之前不提供写入页面；MutationPreview 和审批 UI 在 WriteGateway �
 - `POST /api/chat`：非流式同步结果，供评测脚本使用。
 - `GET /api/results/{result_id}`：分页读取已授权结果。
 - [Spec 05](./05-memory-interrupts-and-artifacts.md) 的 resume 接口。
+- `DELETE /api/threads/{thread_id}`：仅线程所有者可删除近期会话；成功返回 204。
 
 所有请求使用：
 
@@ -125,7 +128,7 @@ SSE 断开时最多自动重连 2 次。重连只订阅同一 `request_id`，不
 | 组件 | 职责 | 禁止事项 |
 | --- | --- | --- |
 | `AppShell` | 布局、导航、全局连接和权限状态 | 不直接调用 MySQL 或拼接 API URL |
-| `ThreadList` | 会话列表、搜索、新建线程 | 不保存完整结果集 |
+| `ThreadList` | 会话列表、搜索、新建、删除线程 | 不保存完整结果集 |
 | `ChatComposer` | 输入、发送、停止、澄清回答 | 不自行判断 SQL 或权限 |
 | `RunEvidenceRail` | Node/Action/耗时/版本公开状态 | 不展示隐藏 Prompt 或隐藏推理 |
 | `ResultTable` | 分页、排序、列分类、空态 | 不允许客户端绕过后端获取全量结果 |
@@ -146,7 +149,7 @@ app:
 
 server:
   cors:
-    allowed_methods: [GET, POST, OPTIONS]
+    allowed_methods: [GET, POST, DELETE, OPTIONS]
     allowed_headers: [Authorization, Content-Type, X-Request-ID, Last-Event-ID]
     allow_credentials: false
     max_age_seconds: 600
@@ -172,7 +175,7 @@ MVP 使用 `Authorization: Bearer`，因此 `allow_credentials` 为 `false`。�
 ## 8. 响应式和无障碍要求
 
 - 桌面布局断点：`>= 1200px` 三栏；`768px-1199px` 收起线程列表或证据栏；`< 768px` 单栏；
-- 键盘可以完成新建线程、发送、停止、选择澄清项、打开证据栏和下载结果；
+- 键盘可以完成新建线程、删除会话、发送、停止、选择澄清项、打开证据栏和下载结果；
 - 所有图标按钮有可见 tooltip 或无障碍名称；
 - 当前 Node、错误和 Interrupt 使用 `aria-live`；
 - 颜色不是唯一状态表达方式，同时使用文字、图标或边框；
@@ -200,7 +203,7 @@ MVP 使用 `Authorization: Bearer`，因此 `allow_credentials` 为 `false`。�
 
 ### 9.3 前端验收标准
 
-- M0：React 应用可启动、可访问 `/login` 和 `/app`，API base URL 和 CORS 配置生效；
+- M0：React 应用可启动、可访问 `/login` 和 `/app`，API base URL 和 CORS 配置生效；已登录刷新不得退回 `/login`，除非 token 已过期或被 401 失效；
 - M3：10 条单轮 Golden Case 可以在界面完成提问、查看 SSE、Trace 和结果表格；
 - M5：多轮指代、Interrupt resume、CSV 和 ECharts DSL 可以恢复且不重复提交；
 - M7：桌面和移动端关键路径通过 Playwright，错误、空结果、权限拒绝和连接断开均有可操作反馈；
@@ -210,9 +213,9 @@ MVP 使用 `Authorization: Bearer`，因此 `allow_credentials` 为 `false`。�
 
 仓库内验收以测试为准，不把截图或手工录屏当作合入证据。
 
-- Spec 08 §5/§6/§7/§8 不变量 (`frontend/src/workbench/spec08.test.tsx` 与 `frontend/src/main.test.tsx`)：三栏工作台与证据脊柱、`EMPTY` 不显示为 0、`PERMISSION_DENIED` 不含对象名、SSE 首次 POST 且重连 GET 不带 message、Interrupt 使用稳定 `client_request_id`、证据栏不含 Prompt。
-- SSE 解析与 `Last-Event-ID` 续传 (`frontend/src/client.test.ts`)。
-- Playwright 登录、提问、证据栏、澄清恢复、设置和移动端布局 (`frontend/e2e/workbench.spec.ts`)。
+- Spec 08 §5/§6/§7/§8 不变量 (`frontend/src/workbench/spec08.test.tsx` 与 `frontend/src/main.test.tsx`)：三栏工作台与证据脊柱、`EMPTY` 不显示为 0、`PERMISSION_DENIED` 不含对象名、SSE 首次 POST 且重连 GET 不带 message、Interrupt 使用稳定 `client_request_id`、证据栏不含 Prompt、已登录刷新恢复会话。
+- SSE 解析、`Last-Event-ID` 续传与 access token 本地恢复 (`frontend/src/client.test.ts`)。
+- Playwright 登录、刷新保会话、提问、证据栏、澄清恢复、设置和移动端布局 (`frontend/e2e/workbench.spec.ts`)。
 - CORS 预检、拒绝 origin、Bearer 头、`allow_credentials=false`、SSE `text/event-stream` (`tests/test_frontend_spec08.py`)。
 - OpenAPI 发布 `RuntimeEvent` 与 `POST|GET /api/chat/stream` (`tests/test_api.py`)。
 
@@ -221,14 +224,14 @@ MVP 使用 `Authorization: Bearer`，因此 `allow_credentials` 为 `false`。�
 | 文件 | 职责 |
 | --- | --- |
 | `frontend/src/workbench/AppShell.tsx` | 顶栏、三栏/抽屉布局、连接状态、用户菜单 |
-| `frontend/src/workbench/ThreadList.tsx` | 会话列表、搜索、新建 |
+| `frontend/src/workbench/ThreadList.tsx` | 会话列表、搜索、新建、删除 |
 | `frontend/src/workbench/ChatComposer.tsx` | 输入、发送、停止 |
 | `frontend/src/workbench/RunEvidenceRail.tsx` | `RETRIEVE -> GENERATE -> EXECUTE -> RESPOND` 公开状态脊柱 |
 | `frontend/src/workbench/ResultTable.tsx` | 分页、当前页排序、空态、CSV |
 | `frontend/src/workbench/ChartRenderer.tsx` | 白名单 ECharts DSL |
-| `frontend/src/workbench/InterruptPanel.tsx` | 澄清候选与 resume |
+| `frontend/src/workbench/InterruptPanel.tsx` | 澄清候选、MutationPreview 审批与 resume |
 | `frontend/src/workbench/TraceDrawer.tsx` | `trace_id` 与公开错误码 |
-| `frontend/src/client.ts` | Bearer、`X-Request-ID`、SSE 解析 |
+| `frontend/src/client.ts` | Bearer、`X-Request-ID`、SSE 解析、access token 本地恢复 |
 | `backend/app/api/app.py` | CORS 中间件、`POST` 启动流、`GET` 重连流 |
 
-M6 之前不提供写入或 MutationPreview 页面。旧 `frontend/src/dashboard/` 两栏聊天布局已删除。
+M6 的 MutationPreview 审批嵌在对话 Interrupt 中，不单独提供写入页面。旧 `frontend/src/dashboard/` 两栏聊天布局已删除。

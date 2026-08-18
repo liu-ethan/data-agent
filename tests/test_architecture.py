@@ -6,7 +6,7 @@ import ast
 import inspect
 from pathlib import Path
 
-from backend.app.gateways import ReadGateway
+from backend.app.gateways import ReadGateway, WriteGateway
 from backend.app.graph import RuntimeGraph
 
 APP = Path(__file__).parents[1] / "backend" / "app"
@@ -18,6 +18,7 @@ def test_required_runtime_layers_exist_and_flat_implementations_are_gone():
         "bootstrap.py",
         "graph/main_graph.py",
         "gateways/read_gateway.py",
+        "gateways/write_gateway.py",
         "services/catalog_retrieval.py",
         "services/permission.py",
         "memory/references.py",
@@ -73,6 +74,7 @@ def test_production_runtime_has_no_implicit_test_double_dependencies():
         APP / "bootstrap.py",
         APP / "api" / "app.py",
         APP / "gateways" / "read_gateway.py",
+        APP / "gateways" / "write_gateway.py",
         APP / "graph" / "main_graph.py",
         APP / "repositories" / "data.py",
         *(APP / "graph" / "nodes").glob("*.py"),
@@ -91,6 +93,7 @@ def test_production_runtime_has_no_implicit_test_double_dependencies():
 
     assert inspect.signature(ReadGateway).parameters["data"].default is inspect.Parameter.empty
     assert inspect.signature(ReadGateway).parameters["results"].default is inspect.Parameter.empty
+    assert inspect.signature(WriteGateway).parameters["data"].default is inspect.Parameter.empty
     assert inspect.signature(RuntimeGraph).parameters["retrieval"].default is inspect.Parameter.empty
     assert inspect.signature(RuntimeGraph).parameters["gateway"].default is inspect.Parameter.empty
 
@@ -118,6 +121,21 @@ def test_mysql_data_adapter_is_only_wired_by_the_composition_root():
         if path in allowed or "testing" in path.parts:
             continue
         if "MySQLDataRepository" in path.read_text(encoding="utf-8"):
+            offenders.append(path.relative_to(APP))
+    assert offenders == []
+
+
+def test_mysql_mutation_adapter_is_only_wired_by_the_composition_root():
+    allowed = {
+        APP / "bootstrap.py",
+        APP / "repositories" / "mutation.py",
+        APP / "repositories" / "__init__.py",
+    }
+    offenders = []
+    for path in APP.rglob("*.py"):
+        if path in allowed or "testing" in path.parts:
+            continue
+        if "MySQLMutationRepository" in path.read_text(encoding="utf-8"):
             offenders.append(path.relative_to(APP))
     assert offenders == []
 

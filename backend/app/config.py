@@ -52,8 +52,8 @@ class Settings(BaseModel):
         return self.raw.get("permissions", {})
 
     @property
-    def artifacts(self) -> dict[str, Any]:
-        return self.raw.get("artifacts", {})
+    def write_query(self) -> dict[str, Any]:
+        return self.raw.get("write_query", {})
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

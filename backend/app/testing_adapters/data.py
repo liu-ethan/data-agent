@@ -156,3 +156,22 @@ class SQLiteDataRepository:
     def fetch(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         cursor = self.connection.execute(sql, params)
         return [dict(row) for row in cursor.fetchall()]
+
+    def writer_identity(self) -> str:
+        return "agent_writer"
+
+    def fetch_target(self, sql: str, parameters: dict[str, Any]) -> list[dict[str, Any]]:
+        return self.fetch(sql, parameters)
+
+    def apply_update(self, table: str, filters: dict[str, Any], changes: dict[str, Any]) -> int:
+        assignments = ", ".join(f"{field} = :{field}" for field in changes)
+        key = next(iter(filters))
+        sql = f"UPDATE {table} SET {assignments} WHERE {key} = :{key}"
+        cursor = self.connection.execute(sql, {**changes, **filters})
+        self.connection.commit()
+        return int(cursor.rowcount)
+
+    def execute_write(self, sql: str, parameters: dict[str, Any]) -> int:
+        cursor = self.connection.execute(sql, parameters)
+        self.connection.commit()
+        return int(cursor.rowcount)

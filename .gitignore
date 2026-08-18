@@ -35,6 +35,9 @@ reports/*.json
 reports/*.csv
 !reports/failure-improvements.json
 
+# Generated Pydantic contract snapshot; reproduce with `make contracts`.
+docs/generated/
+
 # Local-only helper with hardcoded MySQL passwords
 scripts/setup_local.sh
 

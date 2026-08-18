@@ -10,8 +10,9 @@ from uuid import uuid4
 
 from ...errors import RuntimeAgentError
 from ...memory import PromptContextBuilder
-from ...models import Action, CoverageStatus, SchemaGap
+from ...models import Action, CoverageStatus, Intent, SchemaGap
 from .._events import checkpoint_state, emit_event
+from .._mutation import build_mutation_spec
 from .._query_normalizer import bind_draft_to_context, build_query_plan_or_gap
 from ..state import QueryDraft
 
@@ -40,6 +41,34 @@ async def query_generation_node(runtime: Any, run: dict[str, Any]) -> dict[str, 
         runtime, run, "node.started", node="query_generation_node", action=Action.GENERATE
     )
     context = state.grounded_context
+    if state.task_frame and state.task_frame.intent == Intent.DATA_MUTATION:
+        spec = build_mutation_spec(
+            run["message"],
+            task=state.task_frame,
+            permission=run["permission"],
+            request_id=state.request_id,
+        )
+        if spec is None:
+            state.schema_gap = SchemaGap(
+                gap_id=f"gap_{uuid4().hex[:16]}",
+                missing_concepts=["mutation target"],
+                narrow_query=state.task_frame.question,
+                reason="mutation is missing a unique target or new value",
+                retrieval_round=1,
+            )
+        else:
+            state.pending_mutation = spec
+            state.schema_gap = None
+        await checkpoint_state(runtime, run, "query_generation_node")
+        await emit_event(
+            runtime,
+            run,
+            "node.completed",
+            node="query_generation_node",
+            action=Action.GENERATE,
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
+        return {"state": state, "checkpoint_version": run.get("checkpoint_version", -1)}
     if not context or state.coverage != CoverageStatus.SUFFICIENT or not state.task_frame:
         raise RuntimeAgentError(
             "QUERY_SPEC_MISMATCH",

@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from ...models import Action, CoverageStatus, Intent, Interrupt, ResultStatus, RunStatus
 from .._events import checkpoint_state, emit_event
+from .._mutation import forbidden_mutation_message, is_write_cancellation, is_write_confirmation
 from .._request_guard import forbidden_request
 from .._task_understanding import understand_task
 
@@ -20,7 +21,45 @@ _NON_RETRYABLE_GATEWAY_ERRORS = {
     "READER_ACCOUNT_INVALID",
     "READER_ACCOUNT_NOT_READ_ONLY",
     "READER_ACCOUNT_OVERPRIVILEGED",
+    "WRITE_FORBIDDEN",
+    "MUTATION_STALE",
+    "WRITER_ACCOUNT_INVALID",
+    "WRITER_ACCOUNT_OVERPRIVILEGED",
 }
+
+
+_INTERNAL_GAP_LABELS = {
+    "catalog metric binding",
+    "authorized schema evidence",
+    "time field",
+    "business object",
+    "query evidence",
+    "mutation target",
+}
+
+
+def _clarification_candidates(state) -> list[str]:
+    raw: list[str] = []
+    context = state.grounded_context
+    if context is not None:
+        raw.extend(str(item) for item in context.metrics)
+        raw.extend(item.name for item in context.objects)
+    if state.task_frame is not None:
+        raw.extend(state.task_frame.unresolved)
+    if state.schema_gap is not None:
+        raw.extend(state.schema_gap.missing_concepts)
+    seen: list[str] = []
+    for item in raw:
+        text = str(item).strip()
+        if (
+            not text
+            or text.lower() in _INTERNAL_GAP_LABELS
+            or text.startswith(("dimension.", "field.", "metric."))
+        ):
+            continue
+        if text not in seen:
+            seen.append(text)
+    return seen[:8]
 
 
 def _action_fingerprint(action: Action, state) -> str:
@@ -52,8 +91,38 @@ async def agent_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
         state.status = RunStatus.REJECTED
         state.next_action = Action.FAIL
         state.previous_query_error = reason
+    elif run.get("mutation_decision") and state.pending_preview:
+        if state.latest_mutation is not None:
+            state.next_action = (
+                Action.RESPOND
+                if state.latest_mutation.status == ResultStatus.SUCCESS
+                else Action.FAIL
+            )
+            if state.next_action == Action.FAIL:
+                state.previous_query_error = state.latest_mutation.error_code or "WRITE_FORBIDDEN"
+        else:
+            decision = str(run["mutation_decision"])
+            if is_write_confirmation(decision):
+                state.next_action = Action.EXECUTE
+            elif is_write_cancellation(decision):
+                state.pending_preview = None
+                state.pending_mutation = None
+                state.next_action = Action.RESPOND
+            else:
+                state.status = RunStatus.REJECTED
+                state.next_action = Action.FAIL
+                state.previous_query_error = "INTERRUPT_INVALID"
     elif state.pending_interrupt:
         state.status = RunStatus.WAITING_FOR_USER
+        await emit_event(
+            runtime,
+            run,
+            "node.completed",
+            node="agent_node",
+            action=state.next_action,
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
+        return {"state": state, "checkpoint_version": run.get("checkpoint_version", -1)}
     elif state.task_frame is None:
         preferences = {}
         if runtime.persistence and hasattr(runtime.persistence, "user_preferences"):
@@ -78,18 +147,32 @@ async def agent_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
             Action.RESPOND
             if state.task_frame.intent == Intent.CHAT_OR_OUT_OF_SCOPE
             else Action.FAIL
-            if state.task_frame.intent == Intent.DATA_MUTATION
+            if _reject_mutation(state, run)
             else Action.RETRIEVE
+            if state.task_frame.intent != Intent.DATA_MUTATION
+            else Action.GENERATE
         )
-        if state.task_frame.intent == Intent.DATA_MUTATION:
+        if _reject_mutation(state, run):
             state.status = RunStatus.REJECTED
-            state.previous_query_error = "SQL_FORBIDDEN_OPERATION"
+            state.previous_query_error = "WRITE_FORBIDDEN"
     elif state.task_frame.intent == Intent.CHAT_OR_OUT_OF_SCOPE:
         state.next_action = Action.RESPOND
     elif state.task_frame.intent == Intent.DATA_MUTATION:
-        state.status = RunStatus.REJECTED
-        state.next_action = Action.FAIL
-        state.previous_query_error = "SQL_FORBIDDEN_OPERATION"
+        if _reject_mutation(state, run):
+            state.status = RunStatus.REJECTED
+            state.next_action = Action.FAIL
+            state.previous_query_error = "WRITE_FORBIDDEN"
+        elif state.pending_mutation is None:
+            state.next_action = (
+                Action.ASK_USER if state.schema_gap else Action.GENERATE
+            )
+        elif state.latest_mutation is None:
+            state.next_action = Action.EXECUTE
+        elif state.latest_mutation.status == ResultStatus.SUCCESS:
+            state.next_action = Action.RESPOND
+        else:
+            state.next_action = Action.FAIL
+            state.previous_query_error = state.latest_mutation.error_code or "WRITE_FORBIDDEN"
     elif state.coverage != CoverageStatus.SUFFICIENT:
         used = int(state.budgets.get("retrieval_rounds_used", 0))
         state.next_action = (
@@ -127,20 +210,18 @@ async def agent_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
             state.previous_query_error = "GRAPH_TERMINATED"
         else:
             state.last_action_fingerprint = fingerprint
-    if state.next_action == Action.ASK_USER:
+    created_interrupt = False
+    if state.next_action == Action.ASK_USER and state.pending_interrupt is None:
         state.status = RunStatus.WAITING_FOR_USER
         state.pending_interrupt = Interrupt(
             reason="SCHEMA_GAP",
             question="目前无法唯一确定指标或业务对象，请补充具体口径、表或字段。",
-            candidates=(
-                state.schema_gap.missing_concepts
-                if state.schema_gap
-                else state.task_frame.unresolved
-            ),
+            candidates=_clarification_candidates(state),
             checkpoint_id=f"ckpt_{uuid4().hex[:16]}",
             interrupt_id=f"interrupt_{uuid4().hex[:16]}",
             expires_at=datetime.now(UTC) + timedelta(minutes=15),
         )
+        created_interrupt = True
     elif state.next_action == Action.FAIL and state.status != RunStatus.TIMEOUT:
         error = (
             state.latest_observation.error_code
@@ -150,11 +231,11 @@ async def agent_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
         state.previous_query_error = error
         state.status = (
             RunStatus.REJECTED
-            if error in {"PERMISSION_DENIED", "SQL_FORBIDDEN_OPERATION"}
+            if error in {"PERMISSION_DENIED", "SQL_FORBIDDEN_OPERATION", "WRITE_FORBIDDEN", "MUTATION_STALE"}
             else RunStatus.FAILED
         )
     await checkpoint_state(runtime, run, "agent_node")
-    if state.next_action == Action.ASK_USER:
+    if created_interrupt:
         await emit_event(
             runtime,
             run,
@@ -174,3 +255,10 @@ async def agent_node(runtime: Any, run: dict[str, Any]) -> dict[str, Any]:
         error_code=(state.previous_query_error if state.next_action == Action.FAIL else None),
     )
     return {"state": state, "checkpoint_version": run.get("checkpoint_version", -1)}
+
+
+def _reject_mutation(state, run: dict[str, Any]) -> bool:
+    if state.task_frame is None or state.task_frame.intent != Intent.DATA_MUTATION:
+        return False
+    roles = {role.upper() for role in (run.get("permission").roles if run.get("permission") else [])}
+    return "ADMIN" not in roles or forbidden_mutation_message(run.get("message") or "")

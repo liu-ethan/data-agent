@@ -154,7 +154,7 @@ Golden SQL 中不能出现 `...`。每条 case 必须固定用户、时区、时
 | `agent_migration` | ALL | ALL | 初始 DDL/migration、reseed、生产期间不用于任何在线查询 |
 | `agent_control` | ❌ 禁止访问 | CRUD (全部) | API 进程持有;读写控制平面 |
 | `agent_reader` | SELECT (仅 8 张业务表) | ❌ 禁止访问 | ReadGateway 持有;只读业务库 |
-| `agent_writer` | SELECT + UPDATE(products.product_name) | ❌ 禁止访问 | WriteGateway 持有(默认未启用) |
+| `agent_writer` | SELECT + UPDATE(products.product_name) | ❌ 禁止访问 | WriteGateway 持有 |
 
 Reader 账号的 MySQL URL 中 `database=data_agent_ecommerce`,账号 grant
 里不出现 `data_agent_system.*`,物理上无法连接系统库。Control 反之亦然。

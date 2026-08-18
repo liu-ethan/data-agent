@@ -21,6 +21,8 @@ export const ERROR_GUIDANCE: Record<string, string> = {
   CHECKPOINT_CONFLICT: '线程已在其他窗口更新，请重新打开线程后再试。',
   ARTIFACT_STALE: '结果制品已过期或权限发生变化，请重新运行查询。',
   INTERRUPT_INVALID: '该澄清请求已失效，请重新打开线程。',
+  THREAD_DELETE_FAILED: '会话无法删除，请稍后重试。',
+  MEMORY_WRITE_FAILED: '偏好无法保存，请稍后重试。',
 }
 
 export class ApiError extends Error {
@@ -37,6 +39,7 @@ export async function requestJson<T>(path: string, token?: string, init: Request
   if (token) headers.set('Authorization', `Bearer ${token}`)
   if (!headers.has('X-Request-ID')) headers.set('X-Request-ID', newClientRequestId())
   const response = await fetch(`${API}${path}`, {...init, headers})
+  if (response.status === 204) return undefined as T
   const payload = await response.json().catch(() => ({detail: 'REQUEST_FAILED'}))
   if (!response.ok) {
     const code = String(payload.error_code ?? payload.detail ?? 'REQUEST_FAILED')
@@ -52,6 +55,36 @@ export function tokenExpiry(token: string): Date | undefined {
     const normalized = part.replace(/-/g, '+').replace(/_/g, '/')
     const payload = JSON.parse(atob(normalized)) as {exp?: number}
     return payload.exp ? new Date(payload.exp * 1000) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export const ACCESS_TOKEN_STORAGE_KEY = 'dra.access_token'
+
+function tokenIsExpired(token: string): boolean {
+  const expiry = tokenExpiry(token)
+  return Boolean(expiry && expiry.getTime() <= Date.now())
+}
+
+export function writeStoredAccessToken(token: string | undefined): void {
+  try {
+    if (!token || tokenIsExpired(token)) localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY)
+    else localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, token)
+  } catch {
+    return
+  }
+}
+
+export function readStoredAccessToken(): string | undefined {
+  try {
+    const token = localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY) ?? undefined
+    if (!token) return undefined
+    if (tokenIsExpired(token)) {
+      localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY)
+      return undefined
+    }
+    return token
   } catch {
     return undefined
   }
@@ -125,7 +158,7 @@ export async function consumeSse(args: {
       parsed.eventId = Number(eventId)
       args.cursor.lastEventId = parsed.eventId
     }
-    terminal = ['run.completed', 'run.failed', 'interrupt.created'].includes(name)
+    terminal = terminal || ['run.completed', 'run.failed', 'interrupt.created'].includes(name)
     await args.onEvent(parsed)
   }
 

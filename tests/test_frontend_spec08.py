@@ -109,3 +109,14 @@ def test_openapi_publishes_post_and_get_chat_stream():
     for method in ("post", "get"):
         content = stream[method]["responses"]["200"]["content"]
         assert "text/event-stream" in content
+
+
+def test_workbench_css_fills_the_viewport_without_page_growth():
+    css = (FRONTEND_SRC / "styles.css").read_text(encoding="utf-8")
+    assert "calc(100dvh * 16 / 9)" not in css
+    assert "calc(100vw * 9 / 16)" not in css
+    assert "#root:has(.workbench)" in css
+    workbench = css.split(".workbench {", 1)[1].split("}", 1)[0]
+    assert "width: 100%" in workbench
+    assert "height: 100%" in workbench
+    assert "overflow: hidden" in workbench

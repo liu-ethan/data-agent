@@ -12,6 +12,9 @@ from typing import Any, Protocol
 from ..models import (
     CoverageResult,
     GroundedContext,
+    MutationObservation,
+    MutationPreview,
+    MutationSpec,
     PermissionContext,
     QueryPlan,
     ResultObservation,
@@ -28,12 +31,26 @@ class DataQueryPort(Protocol):
     def fetch(self, sql: str, parameters: dict[str, Any]) -> list[dict[str, Any]]: ...
 
 
+class DataMutationPort(Protocol):
+    def writer_identity(self) -> str: ...
+
+    def fetch_target(self, sql: str, parameters: dict[str, Any]) -> list[dict[str, Any]]: ...
+
+    def execute_write(self, sql: str, parameters: dict[str, Any]) -> int: ...
+
+
 class ResultRepositoryPort(Protocol):
     def save(self, rows: list[dict[str, Any]], *, owner_user_id: str | None = None) -> str: ...
 
 
 class ReadGatewayPort(Protocol):
     def execute(self, plan: QueryPlan, permission: PermissionContext) -> ResultObservation: ...
+
+
+class WriteGatewayPort(Protocol):
+    def preview(self, spec: MutationSpec, permission: PermissionContext) -> MutationPreview: ...
+
+    def commit(self, preview: MutationPreview, permission: PermissionContext) -> MutationObservation: ...
 
 
 class CatalogRetrievalPort(Protocol):

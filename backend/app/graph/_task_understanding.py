@@ -20,6 +20,7 @@ from ..memory import (
     extract_explicit_conditions,
 )
 from ..models import ArtifactSpec, Intent, PermissionContext, TaskFrame
+from ._mutation import looks_like_mutation
 from ._time_parser import has_explicit_time, parse_time_range
 from .state import TaskUnderstanding
 
@@ -49,6 +50,8 @@ def _deterministic_fallback(message: str) -> TaskUnderstanding:
     )
     if is_schema:
         return TaskUnderstanding(task_type="SCHEMA_QUERY")
+    if looks_like_mutation(message):
+        return TaskUnderstanding(task_type="DATA_MUTATION", mentions={"raw": [message]})
 
     metric = ""
     dimension_ids: list[str] = []
@@ -87,7 +90,9 @@ _TASK_UNDERSTANDING_SYSTEM = (
     "SCHEMA_QUERY is only about table or field metadata. Greetings, casual "
     "conversation, gibberish, capability questions and requests outside governed "
     "ecommerce analysis are CHAT_OR_OUT_OF_SCOPE and should use next_action "
-    "RESPOND. Preserve original user phrases in mentions. Use recent "
+    "RESPOND. DATA_MUTATION is only for requests to insert or update business "
+    "rows, such as renaming a product. DROP, DELETE, GRANT, FILE and arbitrary "
+    "DML stay forbidden. Preserve original user phrases in mentions. Use recent "
     "conversation only to resolve references such as '刚才'; do not invent SQL, "
     "permissions, catalog IDs, or dates."
 )
@@ -196,7 +201,10 @@ async def understand_task(
         and state.previous_task_frame
         and state.previous_task_frame.time_range
         and not has_explicit_time(message)
-        and intent not in {Intent.SCHEMA_QUERY, Intent.SCHEMA_LOOKUP, Intent.CHAT_OR_OUT_OF_SCOPE}
+        and intent not in {
+            Intent.SCHEMA_QUERY, Intent.SCHEMA_LOOKUP,
+            Intent.CHAT_OR_OUT_OF_SCOPE, Intent.DATA_MUTATION,
+        }
     )
     frame = TaskFrame(
         task_id=f"task_{uuid4().hex[:16]}",
@@ -207,7 +215,10 @@ async def understand_task(
         dimension_ids=draft.dimension_ids,
         time_range=(
             None
-            if intent in {Intent.SCHEMA_QUERY, Intent.SCHEMA_LOOKUP, Intent.CHAT_OR_OUT_OF_SCOPE}
+            if intent in {
+                Intent.SCHEMA_QUERY, Intent.SCHEMA_LOOKUP,
+                Intent.CHAT_OR_OUT_OF_SCOPE, Intent.DATA_MUTATION,
+            }
             else (
                 state.previous_task_frame.time_range
                 if inherit_time

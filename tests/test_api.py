@@ -63,3 +63,4 @@ def test_openapi_publishes_the_generated_sse_event_contract():
             "/RuntimeEvent")
     assert "/api/auth/login" in document["paths"]
     assert "/api/auth/demo-token" not in document["paths"]
+    assert "delete" in document["paths"]["/api/threads/{thread_id}"]

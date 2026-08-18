@@ -150,9 +150,9 @@ def test_fixed_eval_cases_match_contract_and_land_in_80_to_100_runnable():
     assert len(data_query) >= 20
     assert len(multi_turn) >= 12
     assert len(schema_catalog) <= 25
-    deferred = [case for case in cases if case.deferred_reason]
-    assert deferred
-    assert all(case.deferred_reason == "spec_06_write_gateway" for case in deferred)
+    hitl = [case for case in cases if case.category == "hitl"]
+    assert len(hitl) >= 8
+    assert all(case.deferred_reason is None for case in hitl)
     for case in cases:
         assert case.schema_version == "eval_case_v1"
         assert case.messages

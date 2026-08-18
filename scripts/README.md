@@ -52,7 +52,7 @@ MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 scripts/mysql_env.sh check
 | `agent_migration` | `data_agent.*` 全部权限，仅用于迁移、采集和索引发布 |
 | `agent_control` | 运行状态表读写、权限表和语义目录只读 |
 | `agent_reader` | 仅八张分析业务表的 `SELECT`, `SHOW VIEW` |
-| `agent_writer` | 仅 `products.product_name` 的受控 `UPDATE`（当前 API 未启用） |
+| `agent_writer` | 仅 `products.product_name` 的受控 `UPDATE` |
 
 先运行 `init` 创建数据库服务账号，应用全部 Migration 后必须运行 `harden` 写入表级授权。脚本不创建应用层登录用户；应用身份保存在 `app_users`，通过 `scripts/set_user_password.py` 设置密码。
 
@@ -108,4 +108,4 @@ python3.12 scripts/run_production_evaluation.py --account u_demo_user
 
 任务级报告写入 `reports/evaluation.json` / `reports/production-evaluation.json`，
 包含分子、分母、过滤条件、消融对照、最多 8 条失败案例和可复现命令。
-HITL/写入 case 带 `deferred_reason=spec_06_write_gateway`，不计入完成率。
+HITL/写入 case 计入 `hitl_resume_success`；Admin 商品名更新走审批，禁止操作在审批前拒绝。

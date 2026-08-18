@@ -5,7 +5,7 @@ import {ThreadList} from './workbench/ThreadList'
 afterEach(cleanup)
 
 it('shows a friendly empty state in the thread list when no threads exist', () => {
-  render(<ThreadList threads={[]} onOpen={vi.fn()} onNew={vi.fn()} />)
+  render(<ThreadList threads={[]} onOpen={vi.fn()} onNew={vi.fn()} onDelete={vi.fn()} />)
   expect(screen.getByText(/完成第一次分析后会出现在这里/)).toBeInTheDocument()
 })
 
@@ -18,9 +18,10 @@ it('opens a thread and starts a new session from the thread list', () => {
       current="t1"
       onOpen={open}
       onNew={start}
+      onDelete={vi.fn()}
     />,
   )
-  fireEvent.click(screen.getByRole('button', {name: /GMV 分析/}))
+  fireEvent.click(screen.getByRole('button', {name: 'GMV 分析'}))
   expect(open).toHaveBeenCalledWith('t1')
   fireEvent.click(screen.getByRole('button', {name: /新建问题/}))
   expect(start).toHaveBeenCalled()

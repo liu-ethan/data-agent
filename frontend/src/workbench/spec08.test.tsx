@@ -9,7 +9,7 @@ import type {StreamEvent} from '../types'
 afterEach(cleanup)
 
 it('shows a friendly empty state when no threads exist', () => {
-  render(<ThreadList threads={[]} onOpen={vi.fn()} onNew={vi.fn()} />)
+  render(<ThreadList threads={[]} onOpen={vi.fn()} onNew={vi.fn()} onDelete={vi.fn()} />)
   expect(screen.getByText(/完成第一次分析后会出现在这里/)).toBeInTheDocument()
 })
 
@@ -25,13 +25,30 @@ it('filters threads by search and can start a new session', () => {
       current="t1"
       onOpen={open}
       onNew={start}
+      onDelete={vi.fn()}
     />,
   )
   fireEvent.change(screen.getByRole('textbox', {name: '搜索线程'}), {target: {value: 'GMV'}})
-  expect(screen.getByRole('button', {name: /GMV 分析/})).toBeInTheDocument()
-  expect(screen.queryByRole('button', {name: /退款率/})).not.toBeInTheDocument()
+  expect(screen.getByRole('button', {name: 'GMV 分析'})).toBeInTheDocument()
+  expect(screen.queryByRole('button', {name: '退款率'})).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', {name: /新建问题/}))
   expect(start).toHaveBeenCalled()
+})
+
+it('deletes a thread without opening it', () => {
+  const open = vi.fn()
+  const remove = vi.fn()
+  render(
+    <ThreadList
+      threads={[{thread_id: 't1', title: 'GMV 分析', updated_at: new Date().toISOString()}]}
+      onOpen={open}
+      onNew={vi.fn()}
+      onDelete={remove}
+    />,
+  )
+  fireEvent.click(screen.getByRole('button', {name: '删除 GMV 分析'}))
+  expect(remove).toHaveBeenCalledWith('t1')
+  expect(open).not.toHaveBeenCalled()
 })
 
 it('renders the public evidence spine without hidden prompts', () => {

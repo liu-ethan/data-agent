@@ -14,7 +14,7 @@
 | 3 | [03-runtime-graph.md](./03-runtime-graph.md) | M3 | Implemented |
 | 4 | [04-schema-rag-and-coverage.md](./04-schema-rag-and-coverage.md) | M4 | Implemented |
 | 5 | [05-memory-interrupts-and-artifacts.md](./05-memory-interrupts-and-artifacts.md) | M5 | Implemented |
-| 6 | [06-write-gateway-and-hitl.md](./06-write-gateway-and-hitl.md) | M6 | Deferred |
+| 6 | [06-write-gateway-and-hitl.md](./06-write-gateway-and-hitl.md) | M6 | Implemented |
 | 7 | [07-evaluation-and-release.md](./07-evaluation-and-release.md) | M7 | Implemented |
 | 8 | [08-frontend-experience.md](./08-frontend-experience.md) | M0/M3/M5/M7 | Implemented |
 
@@ -26,6 +26,6 @@
 - M3 已固定包含 `EXECUTE` 的 Graph 状态机、API 请求和 SSE 事件契约。
 - M4 已固定检索结果版本、权限前置过滤、分数范围和 Token 预算计算方法。
 - M5 已固定 Checkpoint 乐观锁、Interrupt resume、Artifact 访问校验和幂等规则。
-- M6 建议默认延期，除非只读链路和评测已经稳定。
+- M6 已固定 WriteGateway、MutationPreview、审批 Interrupt、参数化事务和审计。
 - M7 已固定评测用例、结果误差、指标口径和可复现版本信息。
 - Spec 08 已固定前端工作台、SSE、响应式交互、无障碍、Playwright 和 CORS 验收；前端不是后端的附属页面。

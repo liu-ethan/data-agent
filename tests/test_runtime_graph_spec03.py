@@ -182,6 +182,40 @@ def test_data_query_without_executed_query_cannot_end_successfully():
 # §6: Consecutive identical Action + parameters terminate the loop
 # ---------------------------------------------------------------------------
 
+def test_schema_gap_interrupt_omits_internal_coverage_labels():
+    state = _state(
+        coverage=CoverageStatus.PARTIAL,
+        query_plan=None,
+        schema_gap=SchemaGap(
+            gap_id="gap_1",
+            missing_concepts=["catalog metric binding", "time field"],
+            narrow_query="上周退款总金额",
+            reason="partial",
+            retrieval_round=2,
+        ),
+        grounded_context=GroundedContext(
+            context_id="ctx_1",
+            catalog_version="catalog_v1",
+            coverage=CoverageStatus.PARTIAL,
+            token_count=10,
+            permission_policy_version="policy_test_v1",
+            metrics=["refund_amount"],
+        ),
+        budgets={
+            "iterations_used": 2,
+            "retrieval_rounds_used": 2,
+            "query_retries_used": 0,
+            "max_iterations": 6,
+            "max_retrieval_rounds": 2,
+        },
+    )
+    _decide(state)
+    assert state.next_action == Action.ASK_USER
+    assert state.pending_interrupt is not None
+    assert "catalog metric binding" not in state.pending_interrupt.candidates
+    assert "refund_amount" in state.pending_interrupt.candidates
+
+
 def test_repeated_retrieve_with_unchanged_gap_terminates():
     gap = SchemaGap(
         gap_id="gap_1", missing_concepts=["unknown_metric"],

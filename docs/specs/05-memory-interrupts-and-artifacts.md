@@ -29,6 +29,7 @@ Schema、指标、Join 和 Verified SQL 属于共享语义目录，不属于长�
 - 结构化滚动摘要。
 - Key-based 长期偏好（`RuntimePersistence` / `user_memories`）。
 - React Data Table、CSV、ECharts DSL。
+- Owner-only `DELETE /api/threads/{thread_id}`：删除该线程的 checkpoint、历史、消息和标题；结果制品仍按 TTL 失效。
 
 ## 4. Out of Scope
 
@@ -107,6 +108,7 @@ POST /api/threads/{thread_id}/interrupts/{interrupt_id}/resume
 - 当前用户明确条件优先于长期偏好。
 - 待审批 MutationSpec 不能只保留摘要。
 - Checkpoint 采用乐观锁；写入条件为 `thread_id + state_version`，冲突返回 `CHECKPOINT_CONFLICT`。
+- 删除线程必须校验 `state.user_id`；非所有者返回 `PERMISSION_DENIED`，不存在返回 `THREAD_NOT_FOUND`。
 - 每个具有外部副作用的步骤都必须有 `idempotency_key` 和完成标记。
 
 Checkpoint 最小字段为：`checkpoint_id`、`thread_id`、`state_version`、`parent_checkpoint_id`、`status`、`serialized_state_ref`、`idempotency_key`、`created_at`、`updated_at`。Checkpoint 不直接保存密钥或完整结果集。
