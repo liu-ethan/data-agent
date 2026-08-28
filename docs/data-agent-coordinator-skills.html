@@ -1,0 +1,1096 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>data-agent Coordinator + Skills架构</title>
+  <style>
+    :root {
+      --canvas: #f4f7fb;
+      --paper: #ffffff;
+      --ink: #152238;
+      --ink-2: #40506a;
+      --muted: #748099;
+      --line: #d9e1ed;
+      --line-2: #9dabc0;
+      --coordinator: #2457d6;
+      --coordinator-soft: #edf2ff;
+      --rule: #087c73;
+      --rule-soft: #e9f8f5;
+      --llm: #754cbe;
+      --llm-soft: #f2edfc;
+      --tool: #286b9f;
+      --tool-soft: #eaf5fb;
+      --hitl: #af6700;
+      --hitl-soft: #fff5e2;
+      --danger: #a1445b;
+      --danger-soft: #fff0f3;
+      --shadow: 0 18px 54px rgba(29, 52, 91, 0.08);
+      --radius-lg: 22px;
+      --radius-md: 14px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      background: var(--canvas);
+    }
+
+    body {
+      margin: 0;
+      overflow-x: hidden;
+      color: var(--ink);
+      background:
+        linear-gradient(rgba(36, 87, 214, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(36, 87, 214, 0.035) 1px, transparent 1px),
+        var(--canvas);
+      background-size: 28px 28px;
+      font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: inherit; }
+
+    code,
+    .mono,
+    .eyebrow,
+    .section-id,
+    .kind,
+    .contract-label,
+    .rail-label,
+    .packet,
+    .flow-index {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      padding: 0.12em 0.34em;
+      border: 1px solid #dce4f1;
+      border-radius: 5px;
+      color: #244b9d;
+      background: #f7f9fd;
+      font-size: 0.92em;
+    }
+
+    .page {
+      width: min(1580px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 40px 0 64px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 420px;
+      gap: 56px;
+      align-items: end;
+      margin-bottom: 24px;
+    }
+
+    .hero > *,
+    .coordinator-row > *,
+    .skill-rack > *,
+    .store-grid > *,
+    .state-grid > * { min-width: 0; }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--coordinator);
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3,
+    p { margin-top: 0; }
+
+    h1 {
+      max-width: 940px;
+      margin-bottom: 15px;
+      font-family: "Arial Narrow", "Avenir Next Condensed", "PingFang SC", sans-serif;
+      font-size: clamp(40px, 5vw, 70px);
+      font-stretch: condensed;
+      letter-spacing: -0.052em;
+      line-height: 0.98;
+    }
+
+    .hero-copy {
+      max-width: 860px;
+      margin-bottom: 0;
+      color: var(--ink-2);
+      font-size: 15px;
+      line-height: 1.75;
+    }
+
+    .legend-card {
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: 0 10px 32px rgba(29, 52, 91, 0.06);
+    }
+
+    .legend-card > strong {
+      display: block;
+      margin-bottom: 10px;
+      font-size: 12px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+
+    .legend i {
+      width: 9px;
+      height: 9px;
+      border-radius: 2px;
+      background: var(--line-2);
+    }
+
+    .legend .rule i { background: var(--rule); }
+    .legend .llm i { background: var(--llm); }
+    .legend .tool i { background: var(--tool); }
+    .legend .hitl i { background: var(--hitl); }
+    .legend .store i { background: var(--ink-2); }
+
+    .tabs {
+      position: sticky;
+      top: 10px;
+      z-index: 20;
+      display: flex;
+      gap: 6px;
+      margin-bottom: 24px;
+      padding: 7px;
+      overflow-x: auto;
+      border: 1px solid #dce3ee;
+      border-radius: 13px;
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: 0 9px 26px rgba(28, 48, 84, 0.07);
+      backdrop-filter: blur(14px);
+    }
+
+    .tabs a {
+      flex: 0 0 auto;
+      padding: 8px 11px;
+      border-radius: 8px;
+      color: var(--ink-2);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .tabs a:hover,
+    .tabs a:focus-visible {
+      color: var(--coordinator);
+      background: var(--coordinator-soft);
+      outline: none;
+    }
+
+    .section {
+      scroll-margin-top: 78px;
+      margin-top: 30px;
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr);
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .section-id {
+      padding-top: 6px;
+      color: var(--coordinator);
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: 0.08em;
+    }
+
+    h2 {
+      margin-bottom: 6px;
+      font-size: clamp(24px, 3vw, 36px);
+      letter-spacing: -0.025em;
+      line-height: 1.16;
+    }
+
+    .section-head p {
+      max-width: 960px;
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .panel {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-bar {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: center;
+      min-height: 42px;
+      padding: 10px 17px;
+      border-bottom: 1px solid #e5eaf2;
+      color: var(--muted);
+      background: #fbfcfe;
+      font-size: 11px;
+    }
+
+    .panel-bar > * { min-width: 0; }
+
+    .panel-bar strong { color: var(--ink); }
+
+    .architecture {
+      position: relative;
+      padding: 24px;
+    }
+
+    .control-plane,
+    .execution-plane,
+    .data-plane {
+      position: relative;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: #fbfcff;
+      min-width: 0;
+    }
+
+    .execution-plane,
+    .data-plane { margin-top: 34px; }
+
+    .control-plane { border-color: #b9c9f1; background: #f7f9ff; }
+    .execution-plane { border-color: #ced9e8; }
+    .data-plane { background: #f8fafc; }
+
+    .rail-label {
+      position: absolute;
+      top: -10px;
+      left: 16px;
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      color: var(--ink-2);
+      background: var(--paper);
+      font-size: 9px;
+      font-weight: 850;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .control-plane .rail-label { color: var(--coordinator); border-color: #b9c9f1; }
+
+    .coordinator-row {
+      display: grid;
+      grid-template-columns: 155px 34px minmax(0, 1fr) 34px 155px;
+      align-items: stretch;
+    }
+
+    .terminal {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 118px;
+      padding: 15px;
+      border-radius: 13px;
+      color: #fff;
+      background: var(--ink);
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .terminal.output { background: #203e72; }
+
+    .terminal .kind { color: #b8c6df; }
+
+    .terminal strong {
+      display: block;
+      margin: 5px 0 7px;
+      font-size: 16px;
+    }
+
+    .terminal p {
+      margin: 0;
+      color: #d5dceb;
+      font-size: 10.5px;
+      line-height: 1.55;
+    }
+
+    .coordinator {
+      min-width: 0;
+      padding: 16px;
+      border: 2px solid var(--coordinator);
+      border-radius: 15px;
+      background: var(--paper);
+      box-shadow: 0 12px 30px rgba(36, 87, 214, 0.09);
+    }
+
+    .coordinator-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: baseline;
+      margin-bottom: 12px;
+    }
+
+    .coordinator-head h3 { margin: 0; font-size: 19px; }
+    .coordinator-head span { color: var(--muted); font-size: 10px; }
+
+    .coordinator-steps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .compact-node {
+      min-width: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-top: 3px solid var(--line-2);
+      border-radius: 9px;
+      background: #fff;
+    }
+
+    .compact-node strong {
+      display: block;
+      margin-top: 5px;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .compact-node[data-kind="llm"] { border-top-color: var(--llm); background: var(--llm-soft); }
+    .compact-node[data-kind="rule"] { border-top-color: var(--rule); background: var(--rule-soft); }
+    .compact-node[data-kind="hitl"] { border-top-color: var(--hitl); background: var(--hitl-soft); }
+
+    .kind {
+      color: var(--muted);
+      font-size: 8.5px;
+      font-weight: 850;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .kind.rule { color: var(--rule); }
+    .kind.llm { color: var(--llm); }
+    .kind.tool { color: var(--tool); }
+    .kind.hitl { color: var(--hitl); }
+    .kind.store { color: var(--ink-2); }
+
+    .arrow-h,
+    .arrow-down {
+      position: relative;
+      align-self: center;
+      justify-self: center;
+      color: var(--coordinator);
+    }
+
+    .arrow-h {
+      width: 24px;
+      height: 2px;
+      background: currentColor;
+    }
+
+    .arrow-h::after {
+      content: "";
+      position: absolute;
+      top: -4px;
+      right: -1px;
+      width: 8px;
+      height: 8px;
+      border-top: 2px solid currentColor;
+      border-right: 2px solid currentColor;
+      transform: rotate(45deg);
+    }
+
+    .arrow-down {
+      width: 2px;
+      height: 34px;
+      margin: 0 auto -34px;
+      background: var(--coordinator);
+      z-index: 2;
+    }
+
+    .arrow-down::after {
+      content: "";
+      position: absolute;
+      bottom: -1px;
+      left: -4px;
+      width: 8px;
+      height: 8px;
+      border-right: 2px solid var(--coordinator);
+      border-bottom: 2px solid var(--coordinator);
+      transform: rotate(45deg);
+    }
+
+    .skill-rack {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .skill-rack::before {
+      content: "";
+      position: absolute;
+      top: -20px;
+      right: 25%;
+      left: 25%;
+      height: 2px;
+      background: var(--coordinator);
+    }
+
+    .skill-card {
+      position: relative;
+      min-height: 178px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: var(--paper);
+    }
+
+    .skill-card::before {
+      content: "";
+      position: absolute;
+      top: -20px;
+      left: 50%;
+      width: 2px;
+      height: 20px;
+      background: var(--coordinator);
+    }
+
+    .skill-card header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .skill-card h3 { margin: 0; font-size: 15px; }
+
+    .skill-card .number {
+      color: var(--coordinator);
+      font-family: "Arial Narrow", sans-serif;
+      font-size: 22px;
+      font-weight: 850;
+      line-height: 1;
+    }
+
+    .shared-tool-rack {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px dashed #c6d2e2;
+    }
+
+    .shared-tool {
+      padding: 11px 12px;
+      border: 1px solid #b9d6d5;
+      border-radius: 10px;
+      background: var(--tool-soft);
+    }
+
+    .shared-tool strong {
+      display: block;
+      margin: 5px 0 4px;
+      font-size: 11px;
+    }
+
+    .shared-tool p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 9.5px;
+      line-height: 1.45;
+    }
+
+    .mini-flow {
+      display: grid;
+      gap: 5px;
+      margin-bottom: 12px;
+    }
+
+    .mini-flow span {
+      padding: 6px 8px;
+      border-left: 3px solid var(--line-2);
+      color: var(--ink-2);
+      background: #f7f9fc;
+      font-size: 10px;
+      line-height: 1.35;
+    }
+
+    .mini-flow .m-llm { border-color: var(--llm); background: var(--llm-soft); }
+    .mini-flow .m-rule { border-color: var(--rule); background: var(--rule-soft); }
+    .mini-flow .m-tool { border-color: var(--tool); background: var(--tool-soft); }
+    .mini-flow .m-hitl { border-color: var(--hitl); background: var(--hitl-soft); }
+
+    .packet {
+      color: var(--muted);
+      font-size: 9px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
+    .store-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .store {
+      padding: 12px 13px;
+      border: 1px dashed var(--line-2);
+      border-radius: 10px;
+      background: var(--paper);
+    }
+
+    .store strong {
+      display: block;
+      margin: 5px 0 4px;
+      font-size: 12px;
+    }
+
+    .store p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .boundary-strip {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      padding: 14px 18px;
+      border-top: 1px solid #e4eaf2;
+      background: #fbfcfe;
+    }
+
+    .boundary-strip div {
+      color: var(--muted);
+      font-size: 10.5px;
+      line-height: 1.55;
+    }
+
+    .boundary-strip strong { color: var(--ink); }
+
+    .skill-detail {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: var(--shadow);
+    }
+
+    .contract-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border-bottom: 1px solid #e4eaf2;
+      background: #fbfcfe;
+    }
+
+    .contract {
+      min-width: 0;
+      padding: 14px 18px;
+    }
+
+    .contract + .contract { border-left: 1px solid #e4eaf2; }
+
+    .contract-label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--coordinator);
+      font-size: 9px;
+      font-weight: 850;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+
+    .contract p {
+      margin: 0;
+      color: var(--ink-2);
+      font-size: 11px;
+      line-height: 1.6;
+      overflow-wrap: anywhere;
+    }
+
+    .flow-scroll {
+      padding: 22px 18px 16px;
+      overflow-x: auto;
+    }
+
+    .flow-track {
+      display: grid;
+      grid-template-columns: repeat(var(--nodes), minmax(138px, 1fr));
+      gap: 25px;
+      min-width: var(--min-width, 1120px);
+      align-items: stretch;
+    }
+
+    .flow-node {
+      position: relative;
+      min-height: 138px;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-top: 4px solid var(--line-2);
+      border-radius: 12px;
+      background: var(--paper);
+    }
+
+    .flow-node:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      right: -18px;
+      width: 10px;
+      height: 10px;
+      border-top: 2px solid var(--line-2);
+      border-right: 2px solid var(--line-2);
+      transform: translateY(-50%) rotate(45deg);
+    }
+
+    .flow-node[data-kind="rule"] { border-top-color: var(--rule); background: var(--rule-soft); }
+    .flow-node[data-kind="llm"] { border-top-color: var(--llm); background: var(--llm-soft); }
+    .flow-node[data-kind="tool"] { border-top-color: var(--tool); background: var(--tool-soft); }
+    .flow-node[data-kind="hitl"] { border-top-color: var(--hitl); background: var(--hitl-soft); }
+    .flow-node[data-kind="store"] { border-top-color: var(--ink-2); background: #f1f4f8; }
+
+    .flow-index {
+      float: right;
+      color: #9aa6b8;
+      font-size: 9px;
+    }
+
+    .flow-node h3 {
+      clear: both;
+      margin: 8px 0 7px;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .flow-node p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.55;
+    }
+
+    .flow-node .exit {
+      display: block;
+      margin-top: 8px;
+      color: var(--ink-2);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 8.5px;
+      line-height: 1.45;
+    }
+
+    .loop-note {
+      margin: 0 18px 18px;
+      padding: 10px 12px;
+      border: 1px dashed #a894d2;
+      border-radius: 9px;
+      color: var(--ink-2);
+      background: #faf8ff;
+      font-size: 10.5px;
+      line-height: 1.55;
+    }
+
+    .loop-note strong { color: var(--llm); }
+    .loop-note.warning { border-color: #d3a55e; background: #fffaf0; }
+    .loop-note.warning strong { color: var(--hitl); }
+
+    .detail-foot {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      border-top: 1px solid #e4eaf2;
+    }
+
+    .detail-foot > div { padding: 15px 18px; }
+    .detail-foot > div + div { border-left: 1px solid #e4eaf2; }
+
+    .detail-foot h3 {
+      margin-bottom: 7px;
+      font-size: 12px;
+    }
+
+    .detail-foot ul {
+      display: grid;
+      gap: 5px;
+      margin: 0;
+      padding-left: 17px;
+      color: var(--muted);
+      font-size: 10.5px;
+      line-height: 1.5;
+    }
+
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .state-card {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: var(--paper);
+      box-shadow: 0 10px 30px rgba(29, 52, 91, 0.05);
+    }
+
+    .state-card h3 { margin-bottom: 7px; font-size: 14px; }
+    .state-card p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+
+    .final-strip {
+      margin-top: 12px;
+      padding: 15px 18px;
+      border: 1px solid #bdccef;
+      border-left: 4px solid var(--coordinator);
+      border-radius: 10px;
+      color: var(--ink-2);
+      background: var(--coordinator-soft);
+      font-size: 11px;
+      line-height: 1.65;
+    }
+
+    @media (max-width: 1120px) {
+      .hero { grid-template-columns: 1fr; gap: 22px; }
+      .coordinator-row { grid-template-columns: 130px 28px minmax(0, 1fr); }
+      .coordinator-row .arrow-h:last-of-type,
+      .coordinator-row .terminal.output { display: none; }
+      .coordinator-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .skill-rack { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .shared-tool-rack { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .skill-rack::before,
+      .skill-card::before { display: none; }
+      .store-grid,
+      .state-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 720px) {
+      .page { width: min(100% - 24px, 1580px); padding-top: 24px; }
+      h1 { font-size: 39px; }
+      .hero-copy { font-size: 14px; }
+      .legend { display: grid; grid-template-columns: 1fr; }
+      .panel-bar { flex-wrap: wrap; }
+      .panel-bar > span { display: none; }
+      .section-head { grid-template-columns: 38px minmax(0, 1fr); }
+      .architecture { padding: 18px 12px; }
+      .control-plane,
+      .execution-plane,
+      .data-plane { padding: 16px 12px; }
+      .coordinator-row { display: grid; grid-template-columns: 1fr; gap: 12px; }
+      .coordinator-row > * { width: 100%; max-width: 100%; }
+      .coordinator-row .arrow-h { width: 2px; height: 18px; }
+      .coordinator-row .arrow-h::after {
+        top: auto;
+        right: auto;
+        bottom: -1px;
+        left: -4px;
+        border-top: 0;
+        border-right: 2px solid currentColor;
+        border-bottom: 2px solid currentColor;
+      }
+      .coordinator-steps,
+      .skill-rack,
+      .shared-tool-rack,
+      .store-grid,
+      .state-grid { grid-template-columns: 1fr; }
+      .boundary-strip,
+      .contract-row,
+      .detail-foot { grid-template-columns: 1fr; }
+      .boundary-strip { gap: 7px; }
+      .contract + .contract,
+      .detail-foot > div + div { border-left: 0; border-top: 1px solid #e4eaf2; }
+      .flow-scroll { padding: 18px 12px 14px; overflow: visible; }
+      .flow-track {
+        grid-template-columns: 1fr;
+        gap: 24px;
+        min-width: 0;
+      }
+      .flow-node { min-height: 0; }
+      .flow-node:not(:last-child)::after {
+        top: auto;
+        right: 50%;
+        bottom: -17px;
+        transform: translateX(50%) rotate(135deg);
+      }
+      .loop-note { margin: 0 12px 14px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      .page { width: 100%; padding: 0; }
+      .tabs { display: none; }
+      .panel,
+      .skill-detail,
+      .state-card { box-shadow: none; break-inside: avoid; }
+      .section { break-before: page; }
+      .section:first-of-type { break-before: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Trusted Data Runtime</p>
+        <h1>Coordinator + Skills<br>实现架构</h1>
+        <p class="hero-copy">Coordinator管理意图、结构化任务、多轮状态与HITL；可信查询和受控写入保持独立流程，共用Schema Catalog、SQL安全网关和MySQL执行Tool。</p>
+      </div>
+      <aside class="legend-card" aria-label="节点类型图例">
+        <strong>节点类型</strong>
+        <div class="legend">
+          <span class="rule"><i></i>规则：确定性校验与路由</span>
+          <span class="llm"><i></i>LLM：理解与生成</span>
+          <span class="tool"><i></i>Tool：检索与数据库操作</span>
+          <span class="hitl"><i></i>HITL：人工确认</span>
+          <span class="store"><i></i>Store：状态与结果引用</span>
+        </div>
+      </aside>
+    </header>
+
+    <nav class="tabs" aria-label="页面章节">
+      <a href="#overview">总体架构</a>
+      <a href="#query">可信查询</a>
+      <a href="#write">受控写入</a>
+      <a href="#boundary">MVP边界</a>
+      <a href="#state">状态与通信</a>
+    </nav>
+
+    <section id="overview" class="section">
+      <header class="section-head">
+        <span class="section-id">00</span>
+        <div>
+          <h2>总体架构</h2>
+          <p>控制面只传任务和结果引用；SQLite保存Agent状态，MySQL保存电商业务事实，Parquet保存临时查询结果。</p>
+        </div>
+      </header>
+
+      <div class="panel">
+        <div class="panel-bar"><strong>Coordinator控制面 → 两个业务Skill → 公共Tool → 数据存储</strong><span>Skill按目标划分，Tool按能力复用</span></div>
+        <div class="architecture">
+          <div class="control-plane">
+            <span class="rail-label">Control plane</span>
+            <div class="coordinator-row">
+              <div class="terminal">
+                <span class="kind">Input</span>
+                <strong>用户问题</strong>
+                <p>问题、会话、服务端时间、租户与用户身份</p>
+              </div>
+              <span class="arrow-h" aria-hidden="true"></span>
+              <div class="coordinator">
+                <div class="coordinator-head">
+                  <h3>Coordinator</h3>
+                  <span>唯一用户对话入口</span>
+                </div>
+                <div class="coordinator-steps">
+                  <div class="compact-node" data-kind="llm"><span class="kind llm">LLM</span><strong>识别意图并生成结构化任务</strong></div>
+                  <div class="compact-node" data-kind="rule"><span class="kind rule">Rule</span><strong>多轮状态管理与Skill路由</strong></div>
+                  <div class="compact-node" data-kind="hitl"><span class="kind hitl">HITL</span><strong>基于实时候选澄清</strong></div>
+                  <div class="compact-node" data-kind="rule"><span class="kind rule">Rule</span><strong>结果完整性与数据依据检查</strong></div>
+                </div>
+              </div>
+              <span class="arrow-h" aria-hidden="true"></span>
+              <div class="terminal output">
+                <span class="kind">Output</span>
+                <strong>可信回答</strong>
+                <p>结论、表格、指标口径、时间范围和结果引用</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="arrow-down" aria-hidden="true"></div>
+
+          <div class="execution-plane">
+            <span class="rail-label">Execution plane · SkillTask / SkillResult</span>
+            <div class="skill-rack">
+              <article class="skill-card">
+                <header><h3>可信查询Skill</h3><span class="number">Q</span></header>
+                <div class="mini-flow">
+                  <span class="m-rule">规则｜口径、权限、覆盖检查</span>
+                  <span class="m-llm">LLM｜检索问题、查询骨架</span>
+                  <span class="m-tool">Tool｜Schema检索、只读执行</span>
+                </div>
+                <div class="packet">QueryTask → result_id + result_summary</div>
+              </article>
+              <article class="skill-card">
+                <header><h3>受控写入Skill</h3><span class="number">W</span></header>
+                <div class="mini-flow">
+                  <span class="m-rule">规则｜白名单、参数化SQL、≤100行、同一操作防重</span>
+                  <span class="m-llm">LLM｜结构化WritePlan</span>
+                  <span class="m-hitl">HITL｜变更预览与批准</span>
+                </div>
+                <div class="packet">WriteTask → operation_id + audit_id</div>
+              </article>
+            </div>
+            <div class="shared-tool-rack" aria-label="两个Skill共用的基础组件">
+              <div class="shared-tool"><span class="kind tool">Shared Tool</span><strong>Schema Catalog / Retrieval</strong><p>查询执行分层召回；写入只做白名单表字段校验。</p></div>
+              <div class="shared-tool"><span class="kind rule">Shared Rule</span><strong>MetricCompiler / SQL网关</strong><p>指标公式确定性编译；读写策略隔离并校验最终SQL。</p></div>
+              <div class="shared-tool"><span class="kind tool">Shared Tool</span><strong>MySQL执行Tool</strong><p>独立最小权限账号；只读可重试，写入使用回执与InnoDB事务。</p></div>
+            </div>
+          </div>
+
+          <div class="data-plane">
+            <span class="rail-label">Data plane · 只保存引用与受控数据</span>
+            <div class="store-grid">
+              <div class="store"><span class="kind store">SQLite</span><strong>Agent控制面</strong><p>SqliteSaver、QueryTask、HITL状态</p></div>
+              <div class="store"><span class="kind store">SQLite</span><strong>指标 / Schema</strong><p>指标口径、表字段、PK/FK与业务关系</p></div>
+              <div class="store"><span class="kind store">Parquet</span><strong>Result Store</strong><p>WRITING→READY→EXPIRED→DELETED，DuckDB受限筛选</p></div>
+              <div class="store"><span class="kind store">MySQL</span><strong>业务数据面</strong><p>电商业务表、写入回执与业务审计</p></div>
+            </div>
+          </div>
+        </div>
+        <div class="boundary-strip">
+          <div><strong>多轮：</strong>已有列本地筛选；指标、维度或缺失字段变化时重新查库。</div>
+          <div><strong>权限：</strong>每次请求重新加载，不能从Checkpoint恢复。</div>
+          <div><strong>结论：</strong>每个数字必须绑定查询结果和指标版本。</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="query" class="section">
+      <header class="section-head">
+        <span class="section-id">Q1</span>
+        <div><h2>可信查询Skill</h2><p>在权限范围内通过Schema Agentic RAG、SQL网关和受限结果筛选完成多轮问数。</p></div>
+      </header>
+      <div class="skill-detail">
+        <div class="contract-row">
+          <div class="contract"><span class="contract-label">Input · QueryTask</span><p><code>metric_id</code>、维度、筛选、确定时间范围、权限</p></div>
+          <div class="contract"><span class="contract-label">Output · SkillResult</span><p><code>result_id</code>、<code>result_summary</code>、列/行数、指标与Schema版本、<code>data_as_of</code>、错误状态</p></div>
+        </div>
+        <div class="flow-scroll">
+          <div class="flow-track" style="--nodes: 11; --min-width: 1910px;">
+            <article class="flow-node" data-kind="rule"><span class="kind rule">Rule</span><span class="flow-index">Q01</span><h3>权限与口径</h3><p>按metric_id加载指标公式、时间字段、固定筛选和版本，再过滤无权限对象。</p><span class="exit">out: metric_spec + allowed_catalog</span></article>
+            <article class="flow-node" data-kind="llm"><span class="kind llm">LLM</span><span class="flow-index">Q02</span><h3>生成表级检索问题</h3><p>把指标、维度和筛选改写为表级检索问题。</p><span class="exit">out: table_queries[]</span></article>
+            <article class="flow-node" data-kind="tool"><span class="kind tool">Tool</span><span class="flow-index">Q03</span><h3>召回候选表</h3><p>使用BM25与向量检索召回候选表。</p><span class="exit">out: candidate_tables[]</span></article>
+            <article class="flow-node" data-kind="tool"><span class="kind tool">Tool</span><span class="flow-index">Q04</span><h3>表内字段与JOIN</h3><p>在候选表内召回字段，关系图补全JOIN路径。</p><span class="exit">out: schema_candidates[]</span></article>
+            <article class="flow-node" data-kind="rule"><span class="kind rule">Rule</span><span class="flow-index">Q05</span><h3>Schema覆盖检查</h3><p>检查指标、维度、筛选、时间字段和JOIN路径是否完整。</p><span class="exit">complete / gap / ambiguous</span></article>
+            <article class="flow-node" data-kind="llm"><span class="kind llm">LLM</span><span class="flow-index">Q06</span><h3>生成SchemaGap</h3><p>把缺失概念、字段用途、约束和已排除候选整理为补检问题。</p><span class="exit">out: schema_gap</span></article>
+            <article class="flow-node" data-kind="tool"><span class="kind tool">Tool</span><span class="flow-index">Q07</span><h3>全局字段补检</h3><p>全局检索缺失字段，将字段所属表加入候选表。</p><span class="exit">回到Q04，最多2轮 / 无新增 → HITL</span></article>
+            <article class="flow-node" data-kind="llm"><span class="kind llm">LLM</span><span class="flow-index">Q08</span><h3>生成查询骨架</h3><p>只引用metric_id、最小Schema和审核JOIN关系，不展开指标公式。</p><span class="exit">out: query_skeleton</span></article>
+            <article class="flow-node" data-kind="rule"><span class="kind rule">Rule</span><span class="flow-index">Q09</span><h3>确定性指标编译</h3><p>MetricCompiler注入审核公式、固定筛选、时间字段和粒度，生成最终SELECT。</p><span class="exit">out: compiled_select</span></article>
+            <article class="flow-node" data-kind="rule"><span class="kind rule">Shared Rule</span><span class="flow-index">Q10</span><h3>SQL网关·只读策略</h3><p>检查权限、表关联和重复统计；结合EXPLAIN拒绝高成本查询。</p><span class="exit">unsafe / too broad → reject</span></article>
+            <article class="flow-node" data-kind="tool"><span class="kind tool">Shared Tool</span><span class="flow-index">Q11</span><h3>只读执行并保存</h3><p>先创建WRITING元数据，再流式写.part；完成后原子重命名并标记READY。</p><span class="exit">too large → 删除临时文件 / out: result_id</span></article>
+          </div>
+        </div>
+        <div class="loop-note"><strong>Schema Agentic RAG：</strong>Q02—Q07构成“表召回—表内字段召回—关系图补全—覆盖检查”闭环；覆盖不足时生成<code>SchemaGap</code>执行全局字段补检，将命中字段所属表加入候选表后回到Q04，最多2轮。</div>
+        <div class="loop-note"><strong>受限多轮：</strong>已有列的筛选、排序、选列和TopN经规则校验后由DuckDB读取Parquet，生成带<code>parent_result_id</code>的新结果；新增指标、维度或缺失字段时重新进入Q01。</div>
+        <div class="loop-note warning"><strong>大结果边界：</strong>前端只分页读取已落盘Parquet；不按页回查业务库，也不用分库分表绕过扫描和结果限制。</div>
+        <div class="detail-foot">
+          <div><h3>设计亮点</h3><ul><li>先表、后字段、再JOIN；漏表时通过SchemaGap全局字段补检。</li><li>LLM只生成查询骨架，指标公式由MetricCompiler注入。</li></ul></div>
+          <div><h3>解决问题</h3><ul><li>几千张表无法全部塞进上下文。</li><li>LLM猜指标公式、猜JOIN或绕过权限。</li></ul></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="write" class="section">
+      <header class="section-head">
+        <span class="section-id">W1</span>
+        <div><h2>受控写入Skill</h2><p>MVP只开放1～2类白名单操作，默认单次最多影响100行；必须预览、确认、复验，并用事务回执判断是否已提交。</p></div>
+      </header>
+      <div class="skill-detail">
+        <div class="contract-row">
+          <div class="contract"><span class="contract-label">Input · WriteTask</span><p>operation_type、业务对象ID、变更参数、筛选条件和权限</p></div>
+          <div class="contract"><span class="contract-label">Output · SkillResult</span><p><code>operation_id</code>、状态、影响行数、<code>audit_id</code></p></div>
+        </div>
+        <div class="flow-scroll">
+          <div class="flow-track" style="--nodes: 8; --min-width: 1410px;">
+            <article class="flow-node" data-kind="llm"><span class="kind llm">LLM</span><span class="flow-index">W01</span><h3>结构化计划</h3><p>输出operation_type、业务对象ID和参数，不选择物理表。</p><span class="exit">out: WritePlan</span></article>
+            <article class="flow-node" data-kind="rule"><span class="kind rule">Rule</span><span class="flow-index">W02</span><h3>写操作注册表</h3><p>加载允许的表/字段、SQL模板、必填条件、权限和最大影响100行。</p><span class="exit">violation → reject</span></article>
+            <article class="flow-node" data-kind="rule"><span class="kind rule">Rule</span><span class="flow-index">W03</span><h3>参数化SQL构建</h3><p>按operation_type选择审核模板并绑定参数；LLM不能生成自由写SQL。</p><span class="exit">out: prepared_command</span></article>
+            <article class="flow-node" data-kind="tool"><span class="kind tool">Shared Tool</span><span class="flow-index">W04</span><h3>MySQL只读预检</h3><p>解析明确主键、影响范围和版本快照；超过100行直接拒绝。</p><span class="exit">out: change_preview / too large → reject</span></article>
+            <article class="flow-node" data-kind="rule"><span class="kind rule">Rule</span><span class="flow-index">W05</span><h3>prepare_write</h3><p>生成operation_id、request_hash和预览，返回Graph State。</p><span class="exit">checkpoint before HITL</span></article>
+            <article class="flow-node" data-kind="hitl"><span class="kind hitl">HITL</span><span class="flow-index">W06</span><h3>approval</h3><p>节点只调用一次interrupt()；批准绑定操作ID、哈希、批准人与有效期。</p><span class="exit">approve / reject</span></article>
+            <article class="flow-node" data-kind="rule"><span class="kind rule">Shared Rule</span><span class="flow-index">W07</span><h3>execute_write</h3><p>重新加载权限并校验最终SQL；版本或目标变化时重新预览。</p><span class="exit">changed → new preview</span></article>
+            <article class="flow-node" data-kind="tool"><span class="kind tool">Shared Tool</span><span class="flow-index">W08</span><h3>MySQL InnoDB事务</h3><p>唯一回执→原子版本复验→业务变更→审计→完成回执→COMMIT。</p><span class="exit">duplicate → 查原回执 / out: audit_id</span></article>
+          </div>
+        </div>
+        <div class="loop-note"><strong>读写边界：</strong>受控写入Skill只调用只读接口生成变更预览，不承担用户普通查询；查询失败可重试，写入断线后必须先查回执。</div>
+        <div class="loop-note warning"><strong>范围边界：</strong>缺少必填条件或预计影响超过100行时返回<code>WRITE_SCOPE_TOO_LARGE</code>；不自动分页或拆批，大批量变更不进入在线Agent链路。</div>
+        <div class="loop-note warning"><strong>提交结果未知：</strong>SQLite只保存Agent状态；业务结果必须按<code>operation_id</code>查询MySQL主库回执。已提交则返回原结果，确认未提交才允许同ID重试，无法确认则标记<code>UNKNOWN</code>。该ID只防止同一次操作被重复执行。</div>
+        <div class="loop-note"><strong>并发边界：</strong>预览阶段不持锁；最终事务使用<code>WHERE id/version</code>或锁定读原子复验。业务表、回执表和审计表必须位于同一MySQL实例并使用InnoDB。</div>
+        <div class="detail-foot">
+          <div><h3>设计亮点</h3><ul><li>LLM只生成WritePlan，写SQL来自白名单参数化模板。</li><li>操作回执、业务变更、审计记录同事务提交。</li></ul></div>
+          <div><h3>解决问题</h3><ul><li>误写、越权、大范围变更和审批后数据漂移。</li><li>连接中断后无法判断写入是否已生效。</li></ul></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="boundary" class="section">
+      <header class="section-head">
+        <span class="section-id">MVP</span>
+        <div><h2>项目边界</h2><p>只实现能够强化可信查询和受控写入的能力。</p></div>
+      </header>
+      <div class="skill-detail">
+        <div class="detail-foot">
+          <div>
+            <h3>包含</h3>
+            <ul>
+              <li>单Coordinator与两个Skill</li>
+              <li>指标语义层、Schema Agentic RAG与三个公共Tool</li>
+              <li>MetricCompiler、实时数据候选澄清、SqliteSaver状态持久化</li>
+              <li>基于QueryTask与result_id的受限多轮查询</li>
+              <li>有界结果落盘、TTL清理、表格分页与CSV</li>
+              <li>1～2类明确目标的白名单写入、单次最多100行、HITL与同一操作防重</li>
+            </ul>
+          </div>
+          <div>
+            <h3>不包含</h3>
+            <ul>
+              <li>数据计算Skill、任意Python代码和计算沙箱</li>
+              <li>图表报告Skill、自动图表与报告生成</li>
+              <li>Multi-Agent、子Agent和复杂任务DAG</li>
+              <li>预测、聚类、跨数据源分析和长期用户记忆</li>
+              <li>临时结果上的任意SQL和开放式二次计算</li>
+              <li>分库分表、按页回查业务库和无限明细导出</li>
+              <li>通用写入、在线大批量写入和已提交操作的一键回滚</li>
+              <li>多实例部署、SQLite多写节点和跨数据库事务</li>
+            </ul>
+          </div>
+        </div>
+        <div class="loop-note"><strong>计算边界：</strong>GMV、同比、环比、占比、TopN和贡献度通过CTE、条件聚合或窗口函数一次完成；SQL无法表达时返回<code>UNSUPPORTED_ANALYSIS</code>。</div>
+        <div class="loop-note warning"><strong>风险控制：</strong>SQLGlot只负责解析，数据库最小权限和运行时限制负责兜底；HITL节点无前置副作用；Parquet通过临时文件、状态机和读删锁保证完整性。</div>
+      </div>
+    </section>
+
+    <section id="state" class="section">
+      <header class="section-head">
+        <span class="section-id">S0</span>
+        <div><h2>状态与通信</h2><p>共享State只放协调信息；Skill内部过程隔离；大数据通过引用传递。</p></div>
+      </header>
+      <div class="state-grid">
+        <article class="state-card"><span class="kind store">Runtime Context</span><h3>单次请求</h3><p>用户、租户、实时权限、服务端时间、业务时区和数据库连接。</p></article>
+        <article class="state-card"><span class="kind store">SQLite</span><h3>Coordinator State</h3><p>SqliteSaver保存上一轮QueryTask、澄清信息、result_id和operation_id。</p></article>
+        <article class="state-card"><span class="kind store">Skill State</span><h3>调用内私有</h3><p>Schema补检、查询骨架修复、写入预览和重试过程。</p></article>
+        <article class="state-card"><span class="kind store">SQLite + Parquet</span><h3>Result Store</h3><p>SQLite保存所有者、parent_result_id、状态与TTL；Parquet使用临时文件、原子重命名和读删锁。</p></article>
+      </div>
+      <div class="final-strip"><strong>存储契约：</strong>MySQL是业务事实源，SQLite是Agent控制面，Parquet是临时结果面。SQLite状态不能作为MySQL写入已提交的证据。</div>
+    </section>
+  </main>
+</body>
+</html>

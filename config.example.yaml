@@ -1,0 +1,92 @@
+# 复制为 config.yaml 后填入真实密钥。不要把 config.yaml 提交进仓库。
+#
+# 存储边界（不要混用）：
+#   MySQL  = 电商业务事实 + 写入回执/审计
+#   SQLite = Agent 控制面（拆成多个 .sqlite 文件）
+#   Parquet = 查询临时结果
+
+mysql:
+  host: localhost
+  port: 3306
+  database: data-agent-ecommerce
+  charset: utf8mb4
+  admin:
+    user: root
+    password: ""
+  reader:
+    user: da_reader
+    password: ""
+  writer:
+    user: da_writer
+    password: ""
+
+llm:
+  base_url: https://api.example.com/v1
+  api_key: sk-xxx
+  model: your-model
+  timeout_seconds: 60
+  models:
+    coordinator: ""
+    query_skeleton: ""
+    write_plan: ""
+    retrieval: ""
+
+embedding:
+  available: true
+  base_url: https://api.example.com/v1
+  api_key: sk-xxx
+  model: qwen3.7-text-embedding
+  dim: 1024
+
+app:
+  host: 127.0.0.1
+  port: 8000
+  timezone: Asia/Shanghai
+
+sqlite:
+  dir: ./data/sqlite
+  users: ./data/sqlite/users.sqlite
+  catalog: ./data/sqlite/catalog.sqlite
+  embeddings: ./data/sqlite/embeddings.sqlite
+  checkpoint: ./data/sqlite/checkpoint.sqlite
+  runtime: ./data/sqlite/runtime.sqlite
+  results: ./data/sqlite/results.sqlite
+
+results:
+  dir: ./data/results
+  ttl_hours: 1
+  max_rows: 100000
+  max_bytes: 256MB
+
+query:
+  timeout_seconds: 30
+  max_explain_rows: 5000000
+
+write:
+  max_affected_rows: 100
+  approval_ttl_minutes: 15
+
+schema_rag:
+  table_top_k: 5
+  column_top_k: 10
+  max_gap_rounds: 2
+
+auth:
+  mode: local_password
+  users:
+    - username: admin
+      password: admin
+      display_name: 本地管理员
+      role: operator
+    - username: analyst
+      password: analyst
+      display_name: 分析师
+      role: analyst
+
+write_ops:
+  - type: update_sku_status
+  - type: adjust_sku_inventory
+
+dataset:
+  mode: dev_slice
+  metrics: document_10
