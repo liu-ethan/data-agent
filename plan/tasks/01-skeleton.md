@@ -66,10 +66,3 @@ pytest tests/test_config.py -v
 ```
 
 Expected: PASS
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add pyproject.toml config.example.yaml .gitignore backend/app/config.py backend/app/logging.py backend/app/main.py tests/test_config.py README.md
-git commit -m "feat: add project skeleton and YAML settings loader"
-```

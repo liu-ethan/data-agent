@@ -10,5 +10,8 @@ __pycache__/
 .mypy_cache/
 frontend/node_modules/
 node_modules/
+*.egg-info/
+dist/
+build/
 *.parquet
 *.part

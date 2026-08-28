@@ -62,5 +62,3 @@ def test_rejects_inlined_filter_value(task, catalog):
     d = check_read_sql(q, task, catalog, allowed_joins=[])
     assert d.ok is False
 ```
-
-- [ ] **Step 5: Commit** `feat: add SQLGlot read gateway with join and fanout rules`

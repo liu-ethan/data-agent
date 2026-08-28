@@ -24,5 +24,3 @@
 `data_as_of` = `min(request_time_utc, max(本次用到的各 grain 表 time_field 的 MAX()))`。空表则等于时间窗 `start`。
 
 流程：`create_writing` → reader 连接设 `max_execution_time` → **参数化** stream cursor → 写 `.part` → `finalize`。超时/超限走 `abort`。查询失败可重试（幂等 SELECT）。禁止 `text(sql)` 无参数执行。
-
-- [ ] **Step 5: Commit** `feat: add streaming read executor into parquet`

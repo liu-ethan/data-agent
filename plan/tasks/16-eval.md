@@ -41,5 +41,3 @@
 `runner.py` 输出 `tests/golden_results/` 与 Markdown 报告：Table Recall@5、Column Recall@10、Schema 覆盖率、端到端准确率、误拦截率，并注明「12 business tables / 15 reviewed edges / 10 metrics」。不宣称上千张表压测，不把单机 P95 当核心结果。
 
 对话/HITL 套件须断言 `interrupt` 只出现在 Coordinator。
-
-- [ ] **Step 5: Commit** `feat: add offline eval runner aligned with published metrics`

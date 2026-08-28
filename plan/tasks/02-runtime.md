@@ -66,5 +66,3 @@ def test_permissions_are_reloaded_not_cached_from_checkpoint():
 ```
 
 - [ ] **Step 2–4:** 实现半开区间时间解析与权限加载；跑 pytest 至通过。
-
-- [ ] **Step 5: Commit** `feat: add runtime time resolution and permission context`

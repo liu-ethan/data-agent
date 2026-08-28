@@ -40,5 +40,3 @@ SSE 事件类型：`token` | `status` | `interrupt` | `result_ref` | `error` | `
 `POST /resume` 只 `Command.RESUME` Coordinator 图。不要按 Skill 分子 resume。
 
 `GET /api/threads` 读 `runtime.sqlite.thread`；创建线程时同时写 thread 投影与 Checkpoint。不要读写 `task` / `hitl_interrupt` 表。
-
-- [ ] **Step 5: Commit** `feat: add auth, sse chat, result paging, and hitl resume APIs`

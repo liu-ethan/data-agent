@@ -33,5 +33,3 @@
 能力：登录、会话列表、流式对话、HITL 选项（真实 ID）、结果表分页、CSV 下载、写入预览确认（同一 operator）、展示指标口径/时间窗/`data_as_of`。图表仅为已有结果的简单可视化。
 
 - [ ] **Step 1:** Playwright：登录 → 问一句 mock 查询 → 看到表格；写入预览点确认会调用 `/resume`。
-
-- [ ] **Step 5: Commit** `feat: add workbench ui for chat, results, and write approval`

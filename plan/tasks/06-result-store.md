@@ -36,5 +36,3 @@ CSV（T14）上限见 Locked Decision 8：`min(row_count, results.max_rows)`。
 流式写入：超过 `max_rows` / `max_bytes` 则 `abort`。
 
 - [ ] **Step 1:** 测试半写入崩溃后无 `.parquet`、finalize 后可读、过期拒绝、非法列筛选拒绝、权限版本变化拒绝。
-
-- [ ] **Step 5: Commit** `feat: add parquet result store and bounded duckdb follow-up`

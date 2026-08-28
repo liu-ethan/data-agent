@@ -39,5 +39,3 @@ def test_reader_cannot_write():
 ```
 
 - [ ] **Step 2–4:** 三套 engine。本地无 MySQL 时集成测试 skip。
-
-- [ ] **Step 5: Commit** `feat: add split MySQL engines against existing ecommerce slice`

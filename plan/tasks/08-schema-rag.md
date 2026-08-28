@@ -40,5 +40,3 @@
 无 embedding 配置时：`vector.py` 返回空命中，BM25 单独工作。
 
 - [ ] **Step 1:** 用合成 Catalog 测：只提 GMV 应召回 `fact_order`+`fact_order_item`；同名字段 `amount` 不应跨表乱配；缺表时补检能把字段所属表加进来。
-
-- [ ] **Step 5: Commit** `feat: add layered schema agentic RAG with two-round gap fill`

@@ -35,5 +35,3 @@ Follow-up（本模块独有职责）：`followup.py` 判断仅已有列 → Duck
 Skill 私有 state 可含补检轮次、骨架修复次数；不把整表放进返回值。
 
 - [ ] **Step 1:** 用假 LLM 固定输出骨架，断言最终 SQL 含审核公式且为参数化查询、网关拒绝时不执行 MySQL、follow-up 生成 `parent_result_id`、源码/AST 不含 `interrupt`。
-
-- [ ] **Step 5: Commit** `feat: add trusted query skill graph`

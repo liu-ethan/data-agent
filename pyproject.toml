@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-agent"
+version = "0.1.0"
+description = "E-commerce data analysis agent"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "pydantic-settings",
+    "pyyaml",
+    "langgraph",
+    "langchain-openai",
+    "sqlglot",
+    "sqlalchemy",
+    "pymysql",
+    "duckdb",
+    "pyarrow",
+    "rank-bm25",
+    "httpx",
+    "pytest",
+    "ruff",
+]
+
+[tool.setuptools.packages.find]
+include = ["backend*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100

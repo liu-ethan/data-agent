@@ -55,5 +55,3 @@
 写入是否提交只查 MySQL 主库回执。
 
 - [ ] **Step 1:** 并发两次同 `operation_id` 只变更一次；非白名单 SQL 拒绝；101 行预检拒绝。
-
-- [ ] **Step 5: Commit** `feat: add allowlisted write gateway and transactional executor`

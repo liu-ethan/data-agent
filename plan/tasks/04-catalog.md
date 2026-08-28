@@ -56,5 +56,3 @@
 `TableRelation` 字段：`left_table`, `right_table`, `left_col`, `right_col`, `cardinality` (`one_to_one` | `one_to_many` | `many_to_one`), `source` (`fk` | `human`), `version`。
 
 - [ ] **Step 1:** 测试指标加载、未知 `metric_id` 抛错、关系图恰好 15 条 FK 边、不含 LLM 猜测边、`cvr`/`ad_roi` 的 `needs_tables` 在当前库可解析。
-
-- [ ] **Step 5: Commit** `feat: add metric semantic layer over existing schema catalog`

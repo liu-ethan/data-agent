@@ -30,5 +30,3 @@
 - 同一输入两次编译，SQL 与 params 字节级相同。
 
 - [ ] **Step 1:** 同一 skeleton 两次编译 SQL 与 params 字节级相同（确定性）；改 `metric.version` 后 SQL 变化；`gmv`+`order_count` 的 SQL 含两个 grain CTE，且 `fact_order_item` 不在订单 grain CTE 的 FROM 里。
-
-- [ ] **Step 5: Commit** `feat: add deterministic metric compiler for audited formulas`
