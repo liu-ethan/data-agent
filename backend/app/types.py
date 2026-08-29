@@ -154,3 +154,15 @@ class SchemaGap(BaseModel):
     purpose: str
     constraints: list[str] = []
     excluded: list[str] = []
+
+
+class SchemaBundle(BaseModel):
+    tables: list[str]
+    columns: list[str]  # "table.column"
+    joins: list[dict[str, str]]  # {left, right, on_left, on_right, cardinality}
+    catalog_version: int
+
+
+class Ambiguous(BaseModel):
+    reason: str
+    paths: list[list[str]] = []
