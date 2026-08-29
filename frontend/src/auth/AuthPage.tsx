@@ -8,7 +8,7 @@ type Mode = 'login' | 'register'
 const FALLBACK_LOGIN: LoginMeta = {
   eyebrow: '电商经营分析',
   headline: '用一句话问经营数字',
-  lead: '问数对着订单、商品、流量与售后切片作答。分析师查 GMV、品类对比和退款率；改 SKU 状态或库存，必须管理员当场确认。',
+  lead: '问数对着订单、商品、流量与售后作答。分析师查 GMV、品类对比和退款率；改 SKU 状态或库存，必须管理员当场确认。',
   ticker_caption: '可问指标 · 口径已锁定',
   ticker: [
     {label: 'GMV'},

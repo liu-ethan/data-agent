@@ -90,5 +90,5 @@ write_ops:
   - type: adjust_sku_inventory
 
 dataset:
-  mode: dev_slice
-  metrics: document_10
+  mode: local
+  metrics: approved

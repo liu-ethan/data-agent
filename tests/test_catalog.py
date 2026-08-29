@@ -20,9 +20,8 @@ def catalog_db(tmp_path: Path) -> Path:
     return db
 
 
-def test_reviewed_graph_has_exactly_15_fk_edges(catalog_db: Path):
+def test_reviewed_graph_matches_seed_relations(catalog_db: Path):
     edges = list_reviewed_edges(catalog_db=catalog_db)
-    assert len(edges) == 15
     expected = {(left, lcol, right, rcol) for left, lcol, right, rcol, *_ in RELATIONS}
     got = {(e.left_table, e.left_col, e.right_table, e.right_col) for e in edges}
     assert got == expected
@@ -202,7 +201,6 @@ def test_sync_from_mysql_imports_information_schema(catalog_db: Path):
     expected_gmv = next(m for m in METRICS if m["metric_id"] == "gmv")
     assert get_metric("gmv", catalog_db=catalog_db).formula == expected_gmv["formula"]
     edges = list_reviewed_edges(catalog_db=catalog_db)
-    assert len(edges) == 15
     assert all(e.source == "fk" for e in edges)
     assert all(e.cardinality == "many_to_one" for e in edges)
     expected = {(left, lcol, right, rcol) for left, lcol, right, rcol, *_ in RELATIONS}

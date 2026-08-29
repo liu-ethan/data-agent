@@ -91,7 +91,7 @@ def seed_catalog(db_path: Path) -> None:
             conn.execute(load_sql(f"seed.{name}"))
         conn.execute(
             load_sql("seed.seed_insert_catalog_meta"),
-            (mysql_database(), NOW, "dev_slice seed"),
+            (mysql_database(), NOW, "catalog seed"),
         )
         for table_name, business_name, domain, grain in SLICE_TABLES:
             conn.execute(

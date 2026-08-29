@@ -17,12 +17,11 @@ def catalog_db(tmp_path: Path) -> Path:
     return db
 
 
-def test_loads_ten_reviewed_metrics(catalog_db: Path):
+def test_loads_reviewed_metrics(catalog_db: Path):
     store = CatalogStore(catalog_db)
     snapshot = store.load()
     ids = {m.metric_id for m in snapshot.metrics}
     assert ids == set(ALL_METRICS)
-    assert len(snapshot.metrics) == 10
     gmv = get_metric("gmv", catalog_db=catalog_db)
     expected = next(m for m in METRICS if m["metric_id"] == "gmv")
     assert gmv.grain_table == "fact_order_item"

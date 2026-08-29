@@ -85,7 +85,7 @@ def main() -> int:
             n = cur.fetchone()["n"]
             if n < 1:
                 raise SystemExit("FAIL fact_order is empty; re-run seed")
-            print(f"OK  12 business + 2 receipt tables; fact_order rows={n}")
+            print(f"OK  business tables present; fact_order rows={n}")
         must_fail(
             conn,
             "INSERT INTO da_write_receipt (operation_id, request_hash, operation_type, status, payload_json) "

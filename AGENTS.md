@@ -10,8 +10,8 @@
 | `docs/development-notes.md` | 不变量、存储边界、契约。 |
 | `backend/app/types.py` | 跨模块契约。改契约先改文档再改代码。 |
 | `prompts/` | 全部 LLM Prompt（身份 / 任务 / 约束 / 输出 / few-shots）。 |
-| `sql/` | MySQL/SQLite DDL 与命名查询。禁止把静态 SQL 再写进 Python。 |
-| `seeds/` | 切片表、指标、写入模板、产品文案。唯一业务常量源。 |
+| `sql/` | SQLite DDL 与命名查询。禁止把静态 SQL 再写进 Python。 |
+| `seeds/` | 本地业务常量（指标、写入模板、产品文案）。不入库。 |
 | `backend/app/resources/` | Prompt / SQL / 域常量加载器。 |
 
 ## 实现
@@ -26,7 +26,7 @@ MySQL 只放电商事实。Agent 控制面全部在 SQLite（拆成 6 个文件�
 
 | 放哪 | 只允许 | 禁止 |
 | --- | --- | --- |
-| **MySQL** `data-agent-ecommerce` | 12 张业务表；写入回执 `da_write_receipt`；审计 `da_write_audit` | 用户、权限、Catalog、向量、会话、HITL、结果元数据/明细 |
+| **MySQL** `data-agent-ecommerce` | 业务事实表；写入回执 `da_write_receipt`；审计 `da_write_audit` | 用户、权限、Catalog、向量、会话、HITL、结果元数据/明细 |
 | **SQLite** `users.sqlite` | 本地用户、角色、`permission_version` | 业务行、会话、结果 |
 | **SQLite** `catalog.sqlite` | 表/列/关系/指标/写入操作**定义** | 业务行、运行时任务、查询结果 |
 | **SQLite** `embeddings.sqlite` | Schema 向量 | 其它任何状态 |
@@ -43,10 +43,9 @@ Checkpoint 只放：当前/上一轮 Task、HITL payload、`result_id`、`operat
 
 - `interrupt()` 只许出现在 Coordinator。Skill 只返回结果。
 - 只读 SQL 必须参数化（`CompiledQuery`）。LLM 不写指标公式、不加 JOIN 边。
-- 切片锁死：12 张业务表、15 条关系、10 个指标。不扩表，不宣称 48 表。
 - 写入仅 `update_sku_status` / `adjust_sku_inventory`，≤100 行，必须 HITL。
 - `tenant_id` 恒 `"default"`。权限每次重新加载，不进 Checkpoint。
-- `config.yaml`、MySQL 切片、SQLite 控制面已落地，不要重做。
+- `config.yaml`、MySQL 业务库、SQLite 控制面已落地，不要重做。
 - 单测用假 LLM。无 MySQL 则 skip 集成测。禁止用 SQLite 冒充 MySQL。
 
 ## 不做

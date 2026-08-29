@@ -18,7 +18,7 @@
 
 | 亮点 | 做法 |
 | --- | --- |
-| 口径可信 | 审核指标落在 `seeds/`，模型不现场编公式、不加 JOIN |
+| 口径可信 | 审核指标外置，模型不现场编公式、不加 JOIN |
 | 查询可追溯 | Schema RAG → 骨架 SQL → 只读网关 → `CompiledQuery` 参数化执行 |
 | 写入可审批 | SKU 状态 / 库存调整先出预览，管理员确认后提交，回执与审计进 MySQL |
 | 存储隔离 | MySQL 业务事实 · SQLite 控制面 · Parquet 查询结果，三类各司其职 |
@@ -118,8 +118,7 @@ cd frontend && npm install && npm run dev
 | `backend/` | FastAPI、Coordinator、Query / Write Skill、网关、Catalog、结果存储 |
 | `frontend/` | React 工作台（Vite，开发时把 `/api` 代理到 `:8000`） |
 | `prompts/` | 全部 LLM Prompt（身份 / 任务 / 约束 / 输出 / few-shots） |
-| `sql/` | MySQL / SQLite DDL 与命名查询 |
-| `seeds/` | 表关系、指标、写入模板、产品文案 |
+| `sql/` | SQLite 控制面 DDL 与命名查询 |
 | `scripts/` | 业务库落地、SQLite 初始化、连通性检查 |
 | `tests/` | 后端单测 · 前端 Vitest · Playwright E2E |
 | `config.example.yaml` | 配置模板，复制为 `config.yaml` 后本地填写 |
@@ -143,7 +142,7 @@ Checkpoint 保存 Task、HITL payload 与结果引用；权限每次实时加载
 
 ## 问数与写入
 
-指标公式、表关系与写入模板以 `seeds/` 为准。问数覆盖订单、商品、门店、渠道、流量、支付与售后等经营主题。
+问数覆盖订单、商品、门店、渠道、流量、支付与售后等经营主题。
 
 可问指标包括 GMV、实付 GMV、净 GMV、订单量、客单价、退款率、转化率、新客数、复购率、广告 ROI。
 

@@ -31,11 +31,6 @@ FORBIDDEN_IN_SQLITE = {
     "da_write_receipt",
     "da_write_audit",
 }
-SLICE_TABLES = 12
-SLICE_RELATIONS = 15
-SLICE_METRICS = 10
-
-
 def user_tables(conn: sqlite3.Connection) -> set[str]:
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
@@ -71,12 +66,11 @@ def main() -> int:
                 n_tables = conn.execute("SELECT COUNT(*) FROM schema_table").fetchone()[0]
                 n_rel = conn.execute("SELECT COUNT(*) FROM schema_relation").fetchone()[0]
                 n_metric = conn.execute("SELECT COUNT(*) FROM metric_spec").fetchone()[0]
-                if (n_tables, n_rel, n_metric) != (SLICE_TABLES, SLICE_RELATIONS, SLICE_METRICS):
+                if min(n_tables, n_rel, n_metric) < 1:
                     raise SystemExit(
-                        f"FAIL catalog counts tables={n_tables} rel={n_rel} metrics={n_metric} "
-                        f"expected {SLICE_TABLES}/{SLICE_RELATIONS}/{SLICE_METRICS}"
+                        f"FAIL catalog empty tables={n_tables} rel={n_rel} metrics={n_metric}"
                     )
-                print(f"OK  catalog {n_tables} tables / {n_rel} edges / {n_metric} metrics")
+                print("OK  catalog schema_table / schema_relation / metric_spec populated")
             if name == "users":
                 n = conn.execute("SELECT COUNT(*) FROM app_user").fetchone()[0]
                 if n < 1:

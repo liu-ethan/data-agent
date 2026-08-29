@@ -105,8 +105,8 @@ class WriteOp(BaseModel):
 
 
 class DatasetSettings(BaseModel):
-    mode: str = "dev_slice"
-    metrics: str = "document_10"
+    mode: str = "local"
+    metrics: str = "approved"
 
 
 class Settings(BaseSettings):

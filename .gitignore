@@ -18,4 +18,6 @@ build/
 *.part
 plan/
 docs/
+seeds/
+sql/mysql/
 
