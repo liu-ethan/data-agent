@@ -182,12 +182,20 @@ class FollowupAwareQuerySkill:
 
 
 class FakeCoordinatorLlm:
-    def __init__(self, drafts: dict[str, Any], *, answer: str = "GMV 为 100") -> None:
+    def __init__(
+        self,
+        drafts: dict[str, Any],
+        *,
+        answer: str = "GMV 为 100",
+        clarify_reply: dict[str, Any] | None = None,
+    ) -> None:
         self.drafts = drafts
         self.answer = answer
+        self.clarify_reply = clarify_reply or {}
         self.response_prompts: list[str] = []
         self.response_facts: list[dict[str, Any]] = []
         self.classify_prompts: list[str] = []
+        self.clarify_payloads: list[dict[str, Any]] = []
 
     def classify_intent(self, message: str, prompt: str, *, has_parent_query: bool):
         from backend.app.coordinator.intent import IntentDraft
@@ -202,6 +210,11 @@ class FakeCoordinatorLlm:
         self.response_prompts.append(prompt)
         self.response_facts.append(facts)
         return self.answer
+
+    def phrase_clarify(self, payload: dict[str, Any], prompt: str) -> dict[str, Any]:
+        self.clarify_payloads.append(payload)
+        self.classify_prompts.append(prompt)
+        return dict(self.clarify_reply)
 
 
 def _interrupt_payload(result: dict) -> dict:
@@ -299,6 +312,56 @@ def test_intent_draft_accepts_uppercase_llm_intent():
     followup = IntentDraft.model_validate({"intent": "FollowUp", "clarify_kind": "METRIC"})
     assert followup.intent is Intent.FOLLOWUP
     assert followup.clarify_kind == "metric"
+
+
+def test_query_task_without_time_text_defaults_to_this_month():
+    from backend.app.coordinator.intent import IntentDraft, build_query_task
+
+    draft = IntentDraft(intent=Intent.QUERY, metric_ids=["gmv"], dimensions=["dim_category.cat_name"])
+    task = build_query_task(draft, _ctx(), parent=None, result_id=None)
+    assert task.time_range.grain == "month"
+    assert task.time_range.source == "server_default"
+    assert task.time_range.label == "2026-08"
+
+
+def test_empty_result_answer_names_the_window():
+    from backend.app.coordinator.respond import empty_result_answer
+
+    summary = ResultSummary(
+        result_id="r-empty",
+        row_count=0,
+        columns=["gmv"],
+        preview_rows=[],
+        units={"gmv": "CNY"},
+        time_range=TimeRange(
+            start="2026-08-29T00:00:00+08:00",
+            end="2026-08-30T00:00:00+08:00",
+            grain="day",
+            label="2026-08-29",
+            source="user",
+        ),
+        data_as_of="2026-08-27T21:33:00+00:00",
+        metric_versions={"gmv": 1},
+        schema_version=1,
+    )
+    answer = empty_result_answer(summary)
+    assert answer is not None
+    assert "2026-08-29" in answer
+    assert "没有查到数据" in answer
+    assert "无法根据查询结果作答" not in answer
+
+
+def test_query_task_aliases_category_name_dimension():
+    from backend.app.coordinator.intent import IntentDraft, build_query_task
+
+    draft = IntentDraft(
+        intent=Intent.QUERY,
+        metric_ids=["gmv"],
+        dimensions=["dim_category.category_name"],
+        time_text="本月",
+    )
+    task = build_query_task(draft, _ctx(), parent=None, result_id=None)
+    assert task.dimensions == ["dim_category.cat_name"]
 
 
 def test_intent_draft_coerces_null_lists_from_llm():

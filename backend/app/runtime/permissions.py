@@ -5,9 +5,9 @@ import sqlite3
 from pathlib import Path
 
 from backend.app.config import load_settings
+from backend.app.resources.domain import TENANT_ID
+from backend.app.resources.sql import load_sql
 from backend.app.types import PermissionSet
-
-TENANT_ID = "default"
 
 
 def _users_path(users_db: str | Path | None) -> Path:
@@ -25,19 +25,7 @@ def reload_permissions(
     """Load the latest PermissionSet from users.sqlite. Never read Checkpoint."""
     with sqlite3.connect(_users_path(users_db)) as conn:
         conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            """
-            SELECT u.user_id, u.role, u.tenant_id, p.permission_version,
-                   p.allowed_tables_json, p.allowed_columns_json,
-                   p.allowed_metrics_json, p.allowed_write_ops_json
-            FROM app_user u
-            JOIN user_permission p ON p.user_id = u.user_id
-            WHERE u.user_id = ? AND u.is_active = 1
-            ORDER BY p.permission_version DESC
-            LIMIT 1
-            """,
-            (user_id,),
-        ).fetchone()
+        row = conn.execute(load_sql("auth.select_permissions"), (user_id,)).fetchone()
     if row is None:
         raise LookupError(f"unknown user: {user_id}")
     if row["tenant_id"] != TENANT_ID:

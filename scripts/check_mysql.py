@@ -9,23 +9,12 @@ from pathlib import Path
 import pymysql
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from load_config import load_config
+from backend.app.resources.domain import ALL_TABLES, control_tables
 
-BUSINESS_TABLES = [
-    "dim_store",
-    "dim_user",
-    "dim_category",
-    "dim_sku",
-    "dim_channel",
-    "dim_campaign",
-    "fact_order",
-    "fact_order_item",
-    "fact_payment",
-    "fact_refund",
-    "fact_traffic",
-    "fact_ad_spend",
-]
-CONTROL_TABLES = ["da_write_receipt", "da_write_audit"]
+BUSINESS_TABLES = list(ALL_TABLES)
+CONTROL_TABLES = list(control_tables())
 FORBIDDEN_TABLES = [
     "schema_table",
     "schema_column",

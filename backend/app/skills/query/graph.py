@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Callable, Protocol, TypedDict
+from collections.abc import Callable
+from typing import Any, Protocol, TypedDict
 
-import yaml
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.engine import Engine
 
 from backend.app.catalog.models import CatalogSnapshot, MetricSpec, TableRelation
+from backend.app.coordinator.progress import emit_think
 from backend.app.compiler.metric_compiler import compile as compile_metrics
 from backend.app.gateway.read_policy import GatewayDecision, check_read_sql
 from backend.app.llm.schemas import QuerySkeleton
 from backend.app.mysql.execute_read import execute_read
+from backend.app.resources.domain import query_max_repairs
+from backend.app.resources.prompts import render_prompt
 from backend.app.results.store import ResultStore, ResultStoreError
 from backend.app.retrieval.schema_rag import retrieve_schema
 from backend.app.runtime.permissions import reload_permissions
@@ -32,8 +34,6 @@ from backend.app.types import (
     SkillErrorCode,
 )
 
-_PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompt" / "query_skeleton.yaml"
-_MAX_REPAIRS = 2
 _UNREPAIRABLE = (
     "sensitive column",
     "fan-out",
@@ -70,10 +70,7 @@ class QueryState(TypedDict, total=False):
 
 
 def _load_prompt() -> str:
-    data = yaml.safe_load(_PROMPT_PATH.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise TypeError("query_skeleton.yaml must be a mapping")
-    return str(data["query_skeleton"])
+    return render_prompt("query.skeleton")
 
 
 def _relations_from_bundle(bundle: SchemaBundle, catalog: CatalogSnapshot) -> list[TableRelation]:
@@ -113,14 +110,12 @@ def _ground_skeleton(
     grain = metrics[0].grain_table if metrics else skeleton.from_table
     time_field = metrics[0].time_field if metrics else skeleton.time_field
     limit = skeleton.limit if skeleton.limit and skeleton.limit > 0 else task.limit
-    group_by = list(skeleton.group_by)
-    select_dims = list(skeleton.select_dims)
     if not task.dimensions:
-        group_by = []
-        select_dims = []
-    elif not group_by:
+        group_by: list[str] = []
+        select_dims: list[str] = []
+    else:
         group_by = list(task.dimensions)
-        select_dims = select_dims or list(task.dimensions)
+        select_dims = list(task.dimensions)
     return skeleton.model_copy(
         update={
             "metric_ids": list(task.metric_ids),
@@ -182,6 +177,8 @@ def build_query_graph(
 
     def followup_node(state: QueryState) -> dict[str, Any]:
         task = state["task"]
+        if task.parent_result_id:
+            emit_think("followup")
         ctx = _reload(state["ctx"], reload_fn, users_db, catalog.catalog_version)
         parent_task = state.get("parent_task")
         if not task.parent_result_id:
@@ -210,6 +207,7 @@ def build_query_graph(
         return {"ctx": ctx, "result": QuerySkillResult(ok=True, result=summary)}
 
     def q01_coverage(state: QueryState) -> dict[str, Any]:
+        emit_think("q01_coverage")
         ctx = _reload(state["ctx"], reload_fn, users_db, catalog.catalog_version)
         _metrics, err = check_query_coverage(state["task"], ctx, catalog)
         if err is not None:
@@ -217,6 +215,7 @@ def build_query_graph(
         return {"ctx": ctx}
 
     def q02_rag(state: QueryState) -> dict[str, Any]:
+        emit_think("q02_rag")
         ctx = state["ctx"]
         kwargs: dict[str, Any] = {}
         if hasattr(llm, "table_queries"):
@@ -243,6 +242,7 @@ def build_query_graph(
         return {"bundle": retrieved}
 
     def q08_skeleton(state: QueryState) -> dict[str, Any]:
+        emit_think("q08_skeleton")
         bundle = state["bundle"]
         assert bundle is not None
         task = state["task"]
@@ -259,6 +259,7 @@ def build_query_graph(
         }
 
     def q09_compile(state: QueryState) -> dict[str, Any]:
+        emit_think("q09_compile")
         skeleton = state["skeleton"]
         assert skeleton is not None
         metrics = [
@@ -270,6 +271,7 @@ def build_query_graph(
         return {"compiled": compiled}
 
     def q10_gateway(state: QueryState) -> dict[str, Any]:
+        emit_think("q10_gateway")
         compiled = state["compiled"]
         bundle = state["bundle"]
         assert compiled is not None and bundle is not None
@@ -283,7 +285,7 @@ def build_query_graph(
         )
         if decision.ok:
             return {"need_repair": False}
-        if _is_repairable(decision) and state.get("repair_count", 0) < _MAX_REPAIRS:
+        if _is_repairable(decision) and state.get("repair_count", 0) < query_max_repairs():
             return {
                 "need_repair": True,
                 "repair_count": state.get("repair_count", 0) + 1,
@@ -294,6 +296,7 @@ def build_query_graph(
         return {"result": _from_decision(decision), "need_repair": False}
 
     def q11_execute(state: QueryState) -> dict[str, Any]:
+        emit_think("q11_execute")
         ctx = _reload(state["ctx"], reload_fn, users_db, catalog.catalog_version)
         compiled = state["compiled"]
         bundle = state["bundle"]

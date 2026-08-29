@@ -3,12 +3,11 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from itertools import pairwise
-from pathlib import Path
 from typing import Protocol
 
-import yaml
-
 from backend.app.catalog.models import CatalogSnapshot, MetricSpec, TableRelation
+from backend.app.resources.domain import mysql_database
+from backend.app.resources.prompts import render_prompt
 from backend.app.retrieval import bm25, vector
 from backend.app.retrieval.bm25 import Hit
 from backend.app.types import (
@@ -19,7 +18,6 @@ from backend.app.types import (
     SchemaGap,
 )
 
-_PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompt" / "retrieval.yaml"
 _RRF_K = 60
 
 
@@ -38,16 +36,17 @@ class RetrievalLlm(Protocol):
 
 
 def _load_prompts() -> dict[str, str]:
-    data = yaml.safe_load(_PROMPT_PATH.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise TypeError("retrieval.yaml must be a mapping")
-    return {str(k): str(v) for k, v in data.items()}
+    return {
+        "table_queries": render_prompt("query.table_queries"),
+        "schema_gap": render_prompt("query.schema_gap"),
+    }
 
 
 def _column_allowed(table: str, column: str, allowed: list[str]) -> bool:
+    db = mysql_database()
     keys = {
-        f"data-agent-ecommerce.{table}.{column}",
-        f"data-agent-ecommerce.{table}.*",
+        f"{db}.{table}.{column}",
+        f"{db}.{table}.*",
         f"{table}.{column}",
         f"{table}.*",
         "*",

@@ -3,24 +3,18 @@ from __future__ import annotations
 import json
 import re
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
 from typing import Any
 
-import yaml
-
 from backend.app.llm.client import strip_reasoning
+from backend.app.resources.prompts import render_prompt
 from backend.app.types import ResultSummary
 
-_PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompt" / "response.yaml"
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 _REFUSE = "无法根据查询结果作答，数字必须来自本次查询摘要。"
 
 
 def load_response_prompt() -> str:
-    data = yaml.safe_load(_PROMPT_PATH.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise TypeError("response.yaml must be a mapping")
-    return str(data["response"])
+    return render_prompt("coordinator.respond")
 
 
 def _as_json_number(value: object) -> int | float | None:
@@ -56,8 +50,16 @@ def facts_from_summary(summary: ResultSummary) -> dict[str, Any]:
     }
 
 
+def empty_result_answer(summary: ResultSummary) -> str | None:
+    if summary.row_count:
+        return None
+    label = summary.time_range.label or "这个时间窗"
+    return f"{label} 没有查到数据。可以说「本月」再问一次。"
+
+
 def build_response_prompt(facts: dict[str, Any]) -> str:
-    return f"{load_response_prompt()}\n{json.dumps(facts, ensure_ascii=False)}"
+    del facts
+    return load_response_prompt()
 
 
 def _allowed_decimals(facts: dict[str, Any]) -> list[Decimal]:

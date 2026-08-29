@@ -12,7 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT_DEFAULT = ROOT / "migrations" / "mysql" / "002_ecommerce_seed.sql"
+OUT_DEFAULT = ROOT / "sql" / "mysql" / "002_ecommerce_seed.sql"
 
 rng = random.Random(42)
 

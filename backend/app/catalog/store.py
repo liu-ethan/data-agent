@@ -13,6 +13,7 @@ from backend.app.catalog.models import (
     WriteOpSpec,
 )
 from backend.app.config import load_settings
+from backend.app.resources.sql import load_sql
 from backend.app.types import FilterCond
 
 _REVIEWED_SOURCES = frozenset({"fk", "human"})
@@ -62,9 +63,7 @@ class CatalogStore:
     def load(self) -> CatalogSnapshot:
         with sqlite3.connect(self.path) as conn:
             conn.row_factory = sqlite3.Row
-            version_row = conn.execute(
-                "SELECT MAX(catalog_version) AS catalog_version FROM catalog_meta"
-            ).fetchone()
+            version_row = conn.execute(load_sql("catalog.select_catalog_version")).fetchone()
             catalog_version = int(version_row["catalog_version"] or 0)
             tables = [
                 SchemaTable(
@@ -75,7 +74,7 @@ class CatalogStore:
                     comment=row["comment"],
                     aliases=json.loads(row["aliases_json"]),
                 )
-                for row in conn.execute("SELECT * FROM schema_table ORDER BY table_name")
+                for row in conn.execute(load_sql("catalog.select_schema_tables"))
             ]
             columns = [
                 SchemaColumn(
@@ -86,25 +85,15 @@ class CatalogStore:
                     aliases=json.loads(row["aliases_json"]),
                     is_sensitive=bool(row["is_sensitive"]),
                 )
-                for row in conn.execute(
-                    "SELECT * FROM schema_column ORDER BY table_name, column_name"
-                )
+                for row in conn.execute(load_sql("catalog.select_schema_columns"))
             ]
             relations = [
                 _relation_from_row(row)
-                for row in conn.execute(
-                    """
-                    SELECT left_table, right_table, left_col, right_col,
-                           cardinality, source, version
-                    FROM schema_relation
-                    WHERE reviewed = 1 AND source IN ('fk', 'human')
-                    ORDER BY relation_id
-                    """
-                )
+                for row in conn.execute(load_sql("catalog.select_reviewed_relations"))
             ]
             metrics = [
                 _metric_from_row(row)
-                for row in conn.execute("SELECT * FROM metric_spec ORDER BY metric_id")
+                for row in conn.execute(load_sql("catalog.select_metrics"))
             ]
             write_ops = [
                 WriteOpSpec(
@@ -116,7 +105,7 @@ class CatalogStore:
                     requires_hitl=bool(row["requires_hitl"]),
                     version_predicate=row["version_predicate"],
                 )
-                for row in conn.execute("SELECT * FROM write_op ORDER BY operation_type")
+                for row in conn.execute(load_sql("catalog.select_write_ops"))
             ]
         return CatalogSnapshot(
             catalog_version=catalog_version,
@@ -131,7 +120,7 @@ class CatalogStore:
         with sqlite3.connect(self.path) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
-                "SELECT * FROM metric_spec WHERE metric_id = ?",
+                load_sql("catalog.select_metric_by_id"),
                 (metric_id,),
             ).fetchone()
         if row is None:
@@ -141,15 +130,7 @@ class CatalogStore:
     def list_reviewed_edges(self) -> list[TableRelation]:
         with sqlite3.connect(self.path) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                """
-                SELECT left_table, right_table, left_col, right_col,
-                       cardinality, source, version
-                FROM schema_relation
-                WHERE reviewed = 1 AND source IN ('fk', 'human')
-                ORDER BY relation_id
-                """
-            ).fetchall()
+            rows = conn.execute(load_sql("catalog.select_reviewed_relations")).fetchall()
         return [_relation_from_row(row) for row in rows]
 
 

@@ -11,6 +11,7 @@ __all__ = [
     "parse_query_skeleton",
     "parse_write_plan",
     "parse_schema_gap",
+    "parse_clarify",
     "sanitize_intent",
 ]
 
@@ -194,3 +195,24 @@ def parse_schema_gap(data: object, *, fallback: dict[str, Any]) -> SchemaGap:
             "excluded": as_str_list(excluded),
         }
     )
+
+
+def parse_clarify(data: object) -> dict[str, Any]:
+    payload = dict(data) if isinstance(data, dict) else {}
+    candidates: list[dict[str, str]] = []
+    for item in as_list(payload.get("candidates")):
+        if not isinstance(item, dict):
+            continue
+        cid = as_opt_str(item.get("id"))
+        if not cid:
+            continue
+        label = as_opt_str(item.get("label")) or cid
+        kind = as_opt_str(item.get("kind")) or ""
+        entry = {"id": cid, "label": label}
+        if kind:
+            entry["kind"] = kind
+        candidates.append(entry)
+    return {
+        "message": as_opt_str(payload.get("message")) or "",
+        "candidates": candidates,
+    }

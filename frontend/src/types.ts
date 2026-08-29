@@ -62,6 +62,13 @@ export type WritePreview = {
   rows?: Record<string, unknown>[]
   schema_gap?: {missing_concept?: string; purpose?: string}
   ambiguous?: {reason?: string}
+  resolved?: boolean
+}
+
+export type ThinkStep = {
+  node: string
+  label: string
+  text: string
 }
 
 export type ChatMessage = {
@@ -70,10 +77,28 @@ export type ChatMessage = {
   text: string
   result?: ResultPage
   interrupt?: WritePreview
+  thinking?: ThinkStep[]
+  thinkingOpen?: boolean
 }
 
-export const SUGGESTED_QUESTIONS = ['本月 GMV 是多少？', '各品类销售对比', '本月退款率如何？'] as const
+export type LoginMeta = {
+  eyebrow: string
+  headline: string
+  lead: string
+  ticker_caption: string
+  ticker: {label: string}[]
+  capabilities: {title: string; body: string}[]
+}
 
-export function roleLabel(role: Role): string {
+export type AppMeta = {
+  greeting: string
+  suggested_questions: string[]
+  empty_thread_title: string
+  role_labels: Record<string, string>
+  login?: LoginMeta
+}
+
+export function roleLabel(role: Role, labels?: Record<string, string>): string {
+  if (labels?.[role]) return labels[role]
   return role === 'operator' ? '管理员' : '分析师'
 }

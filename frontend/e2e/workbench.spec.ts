@@ -18,6 +18,16 @@ async function mockApi(page: import('@playwright/test').Page, opts?: {role?: str
     const url = new URL(route.request().url())
     const path = url.pathname
     const method = route.request().method()
+    if (path === '/api/meta') {
+      return route.fulfill({
+        json: {
+          greeting: '想查哪一块经营数据？',
+          suggested_questions: ['本月 GMV 是多少？', '各品类销售对比', '本月退款率如何？'],
+          empty_thread_title: '新会话',
+          role_labels: {operator: '管理员', analyst: '分析师'},
+        },
+      })
+    }
     if (path === '/api/auth/login' || path === '/api/auth/register') {
       const body = method === 'POST' ? JSON.parse(route.request().postData() || '{}') : {}
       const resolvedRole = body.role === 'analyst' || role === 'analyst' ? 'analyst' : 'operator'
@@ -69,20 +79,20 @@ async function mockApi(page: import('@playwright/test').Page, opts?: {role?: str
         return route.fulfill({
           contentType: 'text/event-stream',
           body:
-            'event: interrupt\ndata: {"kind":"write_preview","operation_id":"op-1","operation_type":"update_sku_status","affected_rows":1,"changes":[{"id":"1","field":"status","from":"on_sale","to":"off_sale"}]}\n\nevent: done\ndata: {"interrupted":true}\n\n',
+            'event: think\ndata: {"node":"prepare_write","label":"写入预览","text":"正在生成变更预览。"}\n\nevent: interrupt\ndata: {"kind":"write_preview","operation_id":"op-1","operation_type":"update_sku_status","affected_rows":1,"changes":[{"id":"1","field":"status","from":"on_sale","to":"off_sale"}]}\n\nevent: done\ndata: {"interrupted":true}\n\n',
         })
       }
       if (String(posted.message).includes('对比')) {
         return route.fulfill({
           contentType: 'text/event-stream',
           body:
-            'event: interrupt\ndata: {"kind":"clarify","message":"请选择指标","candidates":[{"id":"gmv","label":"GMV"}]}\n\nevent: done\ndata: {"interrupted":true}\n\n',
+            'event: think\ndata: {"node":"plan","label":"理解意图","text":"正在判断这是查询还是写入。"}\n\nevent: interrupt\ndata: {"kind":"clarify","message":"请选择指标","candidates":[{"id":"gmv","label":"GMV"}]}\n\nevent: done\ndata: {"interrupted":true}\n\n',
         })
       }
       return route.fulfill({
         contentType: 'text/event-stream',
         body:
-          'event: result_ref\ndata: {"result_id":"r-1"}\n\nevent: token\ndata: {"text":"GMV 为 100"}\n\nevent: done\ndata: {"answer":"GMV 为 100"}\n\n',
+          'event: think\ndata: {"node":"start","label":"收到问题","text":"正在读取本轮会话，准备判断意图。"}\n\nevent: think\ndata: {"node":"plan","label":"理解意图","text":"正在判断这是查询、写入，还是需要补充条件。"}\n\nevent: think\ndata: {"node":"run_query","label":"查数","text":"正在对照指标与表结构，编译并执行只读查询。"}\n\nevent: result_ref\ndata: {"result_id":"r-1"}\n\nevent: token\ndata: {"text":"GMV 为 100"}\n\nevent: done\ndata: {"answer":"GMV 为 100"}\n\n',
       })
     }
     if (path.startsWith('/api/results/r-1') && !path.endsWith('.csv')) {
@@ -104,6 +114,16 @@ async function mockApi(page: import('@playwright/test').Page, opts?: {role?: str
   })
   return {resumeCalls, threads}
 }
+
+test('login page introduces the product before credentials', async ({page}) => {
+  await mockApi(page)
+  await page.goto('/')
+  await expect(page.getByRole('heading', {name: '用一句话问经营数字'})).toBeVisible()
+  await expect(page.getByText('问得出口径')).toBeVisible()
+  await expect(page.getByText('改得有人点头')).toBeVisible()
+  await expect(page.getByText('进门就能问')).toBeVisible()
+  await expect(page.getByRole('tab', {name: '登录'})).toBeVisible()
+})
 
 test('login survives reload instead of returning to the login page', async ({page}) => {
   await mockApi(page)
@@ -148,6 +168,10 @@ test('empty state has exactly three suggested questions and clicking sends one',
   await expect(page.getByText('本月 GMV 是多少？')).toBeVisible()
   await expect(page.getByText('GMV 为 100')).toBeVisible()
   await expect(page.getByRole('cell', {name: 's1'})).toBeVisible()
+  await expect(page.getByRole('button', {name: '已思考 3 步'})).toBeVisible()
+  await expect(page.getByText('正在对照指标与表结构，编译并执行只读查询。')).toHaveCount(0)
+  await page.getByRole('button', {name: '已思考 3 步'}).click()
+  await expect(page.getByText('正在对照指标与表结构，编译并执行只读查询。')).toBeVisible()
 })
 
 test('write preview confirm calls resume', async ({page}) => {
@@ -166,7 +190,7 @@ test('write preview confirm calls resume', async ({page}) => {
 })
 
 test('clarify interrupt shows candidate buttons', async ({page}) => {
-  const api = await mockApi(page)
+  await mockApi(page)
   await page.goto('/')
   await page.getByLabel('账号').fill('admin')
   await page.getByLabel('密码').fill('admin')
@@ -175,8 +199,8 @@ test('clarify interrupt shows candidate buttons', async ({page}) => {
   await page.getByRole('button', {name: '发送'}).click()
   await expect(page.getByText('请选择', {exact: true})).toBeVisible()
   await page.getByRole('button', {name: 'GMV', exact: true}).click()
-  await expect.poll(() => api.resumeCalls.length).toBe(1)
-  expect(api.resumeCalls[0]).toMatchObject({selected_id: 'gmv'})
+  await expect(page.getByText('GMV 为 100')).toBeVisible()
+  await expect(page.getByText('请选择', {exact: true})).toHaveCount(0)
 })
 
 test('sidebar can delete a recent thread', async ({page}) => {

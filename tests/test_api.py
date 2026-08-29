@@ -26,7 +26,7 @@ TIME_RANGE = TimeRange(
     label="2026-08",
     source="user",
 )
-USERS_DDL = Path("migrations/sqlite/users.sql").read_text(encoding="utf-8")
+USERS_DDL = (SQL_DIR / "users.sql").read_text(encoding="utf-8")
 
 
 def _seed_users(path: Path) -> Path:
@@ -237,14 +237,43 @@ def test_messages_sse_emits_status_result_token_and_done(env):
     events = _sse_events(res.text)
     names = [name for name, _ in events]
     assert "status" in names
+    assert "think" in names
     assert "result_ref" in names
     assert "token" in names
     assert names[-1] == "done"
     payload = dict(events)
+    assert payload["think"]["label"]
     assert payload["result_ref"]["result_id"] == "r-fixed"
     assert "GMV" in payload["token"]["text"]
     assert env.coordinator.calls[-1]["resume"] is None
     assert env.coordinator.calls[-1]["message"] == "本月GMV"
+
+
+def test_messages_sse_streams_think_from_invoke(env):
+    from backend.app.coordinator.progress import emit_think
+
+    original = env.coordinator
+
+    def with_think(graph, message, ctx, *, resume=None):
+        emit_think("plan")
+        emit_think("run_query")
+        return original(graph, message, ctx, resume=resume)
+
+    env.app.state.invoke_fn = with_think
+    headers = _login(env.client)
+    thread_id = env.client.post("/api/threads", headers=headers).json()["thread_id"]
+    events = _sse_events(
+        env.client.post(
+            f"/api/threads/{thread_id}/messages",
+            json={"message": "本月GMV"},
+            headers=headers,
+        ).text
+    )
+    names = [name for name, _ in events]
+    labels = [data["label"] for name, data in events if name == "think"]
+    assert labels == ["收到问题", "理解意图", "查数"]
+    assert names.index("think") < names.index("token")
+    assert names[-1] == "done"
 
 
 def test_messages_sse_hides_parse_errors(env):

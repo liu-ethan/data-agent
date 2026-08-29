@@ -7,11 +7,13 @@ import yaml
 from pydantic import BaseModel, Field
 
 from backend.app.gateway.write_policy import WriteGatewayError
+from backend.app.resources.domain import (
+    allowed_operation_types,
+    sku_status_values,
+    write_max_affected_rows,
+)
+from backend.app.resources.paths import seeds_dir
 from backend.app.types import SkillErrorCode, WritePlan
-
-ALLOWED_OPERATION_TYPES = frozenset({"update_sku_status", "adjust_sku_inventory"})
-_STATUS_VALUES = frozenset({"on_sale", "off_sale"})
-_MAX_AFFECTED_ROWS = 100
 
 
 class WriteOpDef(BaseModel):
@@ -20,7 +22,7 @@ class WriteOpDef(BaseModel):
     allowed_columns: list[str]
     sql_template: str
     required_params: list[str] = []
-    max_affected_rows: int = _MAX_AFFECTED_ROWS
+    max_affected_rows: int = Field(default_factory=write_max_affected_rows)
     version_predicate: str | None = None
     locking_read: bool = False
     must_hitl: bool = True
@@ -32,7 +34,7 @@ class PreparedCommand(BaseModel):
     sql: str
     params: dict[str, Any]
     object_ids: list[str]
-    max_affected_rows: int = _MAX_AFFECTED_ROWS
+    max_affected_rows: int = Field(default_factory=write_max_affected_rows)
     version_predicate: str | None = None
     locking_read: bool = False
     operation_id: str | None = None
@@ -41,7 +43,7 @@ class PreparedCommand(BaseModel):
 
 
 def _default_yaml() -> Path:
-    return Path(__file__).resolve().parents[4] / "seeds" / "write_ops.yaml"
+    return seeds_dir() / "write_ops.yaml"
 
 
 def load_write_ops(path: str | Path | None = None) -> dict[str, WriteOpDef]:
@@ -49,15 +51,17 @@ def load_write_ops(path: str | Path | None = None) -> dict[str, WriteOpDef]:
     raw = yaml.safe_load(source.read_text(encoding="utf-8"))
     if not isinstance(raw, list):
         raise WriteGatewayError(SkillErrorCode.REJECTED, "write_ops.yaml must be a list")
+    allowed = allowed_operation_types()
+    max_rows = write_max_affected_rows()
     ops: dict[str, WriteOpDef] = {}
     for item in raw:
         if not isinstance(item, dict):
             continue
         op_type = item.get("operation_type")
-        if op_type not in ALLOWED_OPERATION_TYPES:
+        if op_type not in allowed:
             continue
         ops[op_type] = WriteOpDef.model_validate(
-            {**item, "must_hitl": True, "max_affected_rows": _MAX_AFFECTED_ROWS}
+            {**item, "must_hitl": True, "max_affected_rows": max_rows}
         )
     return ops
 
@@ -83,7 +87,7 @@ def build_command(plan: WritePlan) -> PreparedCommand:
         params[name] = plan.params[name]
     if plan.operation_type == "update_sku_status":
         status = params["status"]
-        if status not in _STATUS_VALUES:
+        if status not in sku_status_values():
             raise WriteGatewayError(SkillErrorCode.REJECTED, "status must be on_sale or off_sale")
     elif plan.operation_type == "adjust_sku_inventory":
         try:

@@ -8,7 +8,8 @@ import httpx
 
 from backend.app.config import LlmSettings
 from backend.app.coordinator.intent import IntentDraft
-from backend.app.llm.schemas import QuerySkeleton, parse_query_skeleton, parse_schema_gap, parse_write_plan
+from backend.app.llm.schemas import QuerySkeleton, parse_clarify, parse_query_skeleton, parse_schema_gap, parse_write_plan
+from backend.app.resources.prompts import render_user
 from backend.app.types import QueryTask, SchemaBundle, SchemaGap, WritePlan, WriteTask
 
 _FENCE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
@@ -103,14 +104,10 @@ class ChatLlm:
                 {"role": "system", "content": prompt},
                 {
                     "role": "user",
-                    "content": (
-                        f"has_parent_query={has_parent_query}\n用户消息：{message}\n"
-                        "只输出 JSON，字段固定为："
-                        "intent, metric_ids, dimensions, filters, order_by, limit, "
-                        "time_text, operation_type, object_ids, refer_previous_skus, "
-                        "params, clarify_kind, clarify_query。"
-                        "列表用 []，不要用 null；query 的 operation_type 必须为 null；"
-                        "时间用 time_text（如 本月），不要输出 time_range。"
+                    "content": render_user(
+                        "coordinator.intent",
+                        has_parent_query=has_parent_query,
+                        message=message,
                     ),
                 },
             ],
@@ -126,7 +123,13 @@ class ChatLlm:
             self._chat(
                 [
                     {"role": "system", "content": prompt},
-                    {"role": "user", "content": json.dumps(facts, ensure_ascii=False)},
+                    {
+                        "role": "user",
+                        "content": render_user(
+                            "coordinator.respond",
+                            facts_json=json.dumps(facts, ensure_ascii=False),
+                        ),
+                    },
                 ],
                 slot="coordinator",
                 max_tokens=512,
@@ -146,13 +149,16 @@ class ChatLlm:
                 {"role": "system", "content": prompt},
                 {
                     "role": "user",
-                    "content": json.dumps(
-                        {
-                            "task": task.model_dump(),
-                            "bundle": bundle.model_dump(),
-                            "repair_reason": repair_reason,
-                        },
-                        ensure_ascii=False,
+                    "content": render_user(
+                        "query.skeleton",
+                        payload_json=json.dumps(
+                            {
+                                "task": task.model_dump(),
+                                "bundle": bundle.model_dump(),
+                                "repair_reason": repair_reason,
+                            },
+                            ensure_ascii=False,
+                        ),
                     ),
                 },
             ],
@@ -167,7 +173,13 @@ class ChatLlm:
         raw = self._chat(
             [
                 {"role": "system", "content": prompt},
-                {"role": "user", "content": json.dumps(task.model_dump(), ensure_ascii=False)},
+                {
+                    "role": "user",
+                    "content": render_user(
+                        "write.plan",
+                        payload_json=json.dumps(task.model_dump(), ensure_ascii=False),
+                    ),
+                },
             ],
             slot="write_plan",
         )
@@ -177,7 +189,13 @@ class ChatLlm:
         raw = self._chat(
             [
                 {"role": "system", "content": prompt},
-                {"role": "user", "content": json.dumps(task.model_dump(), ensure_ascii=False)},
+                {
+                    "role": "user",
+                    "content": render_user(
+                        "query.table_queries",
+                        payload_json=json.dumps(task.model_dump(), ensure_ascii=False),
+                    ),
+                },
             ],
             slot="retrieval",
             max_tokens=1024,
@@ -214,7 +232,7 @@ class ChatLlm:
         raw = self._chat(
             [
                 {"role": "system", "content": prompt},
-                {"role": "user", "content": json.dumps(fallback, ensure_ascii=False)},
+                {"role": "user", "content": render_user("query.schema_gap", payload_json=json.dumps(fallback, ensure_ascii=False))},
             ],
             slot="retrieval",
             max_tokens=1024,
@@ -224,3 +242,39 @@ class ChatLlm:
         except json.JSONDecodeError:
             data = {}
         return parse_schema_gap(data, fallback=fallback)
+
+    def summarize_title(self, message: str, prompt: str) -> str:
+        return strip_reasoning(
+            self._chat(
+                [
+                    {"role": "system", "content": prompt},
+                    {
+                        "role": "user",
+                        "content": render_user("coordinator.title", message=message),
+                    },
+                ],
+                slot="coordinator",
+                max_tokens=32,
+            )
+        )
+
+    def phrase_clarify(self, payload: dict[str, Any], prompt: str) -> dict[str, Any]:
+        raw = self._chat(
+            [
+                {"role": "system", "content": prompt},
+                {
+                    "role": "user",
+                    "content": render_user(
+                        "coordinator.clarify",
+                        payload_json=json.dumps(payload, ensure_ascii=False),
+                    ),
+                },
+            ],
+            slot="coordinator",
+            max_tokens=512,
+        )
+        try:
+            data = extract_json(raw)
+        except json.JSONDecodeError:
+            data = {}
+        return parse_clarify(data)

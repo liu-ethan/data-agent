@@ -3,7 +3,6 @@ from __future__ import annotations
 import ast
 import inspect
 from datetime import timedelta
-from pathlib import Path
 
 from backend.app.types import (
     PermissionSet,
@@ -115,10 +114,11 @@ def _execute(prepared, ctx, engine, **kwargs):
 
 
 def test_write_skill_modules_do_not_call_interrupt():
+    from backend.app.resources.prompts import render_prompt
     from backend.app.skills.write import graph, preview
 
-    prompt = Path("backend/app/prompt/write_plan.yaml").read_text(encoding="utf-8")
-    assert "interrupt" not in prompt.lower() or "不要调用 interrupt" in prompt
+    prompt = render_prompt("write.plan")
+    assert "不要调用 interrupt" in prompt
 
     for mod in (graph, preview):
         src = inspect.getsource(mod)

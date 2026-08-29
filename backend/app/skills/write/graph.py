@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any, Protocol, TypedDict
 
-import yaml
 from langgraph.graph import END, START, StateGraph
-from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from backend.app.gateway.write_policy import WriteGatewayError, check_write_sql, request_hash
 from backend.app.mysql.execute_write import ExecuteWriteError
 from backend.app.mysql.execute_write import execute_write as commit_write
+from backend.app.resources.domain import tenant_id
+from backend.app.resources.prompts import render_prompt
+from backend.app.resources.sql import mysql_text
 from backend.app.runtime.permissions import reload_permissions
 from backend.app.skills.write.preview import (
     PreviewError,
@@ -31,7 +31,6 @@ from backend.app.types import (
     WriteTask,
 )
 
-_PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompt" / "write_plan.yaml"
 _FORBIDDEN_PARAM_KEYS = frozenset({"sql", "table", "target_table"})
 _DEFAULT_TTL = 15
 
@@ -53,10 +52,7 @@ class WriteState(TypedDict, total=False):
 
 
 def _load_prompt() -> str:
-    data = yaml.safe_load(_PROMPT_PATH.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise TypeError("write_plan.yaml must be a mapping")
-    return str(data["write_plan"])
+    return render_prompt("write.plan")
 
 
 def _fail(
@@ -91,8 +87,8 @@ def _reload(
 
 
 def _authorize(task: WriteTask, ctx: RuntimeContext) -> WriteSkillResult | None:
-    if ctx.tenant_id != "default" or ctx.permissions.tenant_id != "default":
-        return _fail(SkillErrorCode.REJECTED, "tenant_id must be default")
+    if ctx.tenant_id != tenant_id() or ctx.permissions.tenant_id != tenant_id():
+        return _fail(SkillErrorCode.REJECTED, f"tenant_id must be {tenant_id()}")
     if ctx.role != "operator" or not ctx.permissions.allowed_write_ops:
         return _fail(SkillErrorCode.REJECTED, "analyst cannot write")
     if task.operation_type not in ctx.permissions.allowed_write_ops:
@@ -126,11 +122,7 @@ def _load_receipt(engine: Engine, operation_id: str) -> dict[str, Any] | None:
     with engine.connect() as conn:
         row = (
             conn.execute(
-                text(
-                    "SELECT operation_id, request_hash, operation_type, status, "
-                    "affected_rows, audit_id FROM da_write_receipt "
-                    "WHERE operation_id = :operation_id"
-                ),
+                mysql_text("write.select_write_receipt"),
                 {"operation_id": operation_id},
             )
             .mappings()

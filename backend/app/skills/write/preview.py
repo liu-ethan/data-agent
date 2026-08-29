@@ -8,6 +8,8 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Engine
 
 from backend.app.skills.write.registry import PreparedCommand
+from backend.app.resources.domain import writable_tables
+from backend.app.resources.sql import load_sql
 from backend.app.types import SkillErrorCode, WritePlan
 
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -47,7 +49,7 @@ def _bound(sql: str, params: dict[str, Any]):
 def precheck_rows(cmd: PreparedCommand, engine: Engine) -> list[dict[str, Any]]:
     """Reader precheck: explicit PKs and row_version, never FOR UPDATE."""
     table = cmd.target_table
-    if not _IDENT.match(table):
+    if table not in writable_tables() or not _IDENT.match(table):
         raise PreviewError(SkillErrorCode.REJECTED, "invalid target table")
     ids = cmd.params.get("ids") or [int(i) for i in cmd.object_ids]
     if not ids:
@@ -57,9 +59,7 @@ def precheck_rows(cmd: PreparedCommand, engine: Engine) -> list[dict[str, Any]]:
             SkillErrorCode.WRITE_SCOPE_TOO_LARGE,
             f"write scope {len(ids)} exceeds max_affected_rows={cmd.max_affected_rows}",
         )
-    sql = (
-        f"SELECT id, row_version, status, inventory_qty FROM `{table}` WHERE id IN :ids"
-    )
+    sql = load_sql("write.precheck_target_rows", table=table)
     with engine.connect() as conn:
         rows = [
             dict(row)

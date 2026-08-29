@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field
 
 from backend.app.results.duckdb_filter import filter_parquet
 from backend.app.results.parquet import LimitExceeded, ParquetStreamWriter, parse_byte_size
+from backend.app.resources.domain import result_preview_rows, tenant_id
+from backend.app.resources.sql import load_sql
 from backend.app.types import (
     LocalFilterSpec,
     ResultSummary,
@@ -20,8 +22,6 @@ from backend.app.types import (
     SkillErrorCode,
     TimeRange,
 )
-
-_TENANT = "default"
 
 
 class ResultStoreError(Exception):
@@ -84,12 +84,7 @@ class ResultStore:
         with self._result_lock(result_id):
             with self._connect() as conn:
                 conn.execute(
-                    """INSERT INTO query_result (
-                        result_id, thread_id, user_id, status, parquet_path,
-                        row_count, columns_json, parent_result_id, time_range_json,
-                        permission_version, catalog_version, schema_version,
-                        data_as_of, metric_versions_json, created_at, expires_at
-                    ) VALUES (?, ?, ?, 'WRITING', ?, NULL, '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    load_sql("results.insert_query_result"),
                     (
                         result_id,
                         meta.thread_id,
@@ -140,16 +135,14 @@ class ResultStore:
             row_count = writer.row_count
             with self._connect() as conn:
                 conn.execute(
-                    """UPDATE query_result
-                       SET status = 'READY', row_count = ?, columns_json = ?, data_as_of = ?
-                       WHERE result_id = ?""",
+                    load_sql("results.update_query_result_ready"),
                     (row_count, json.dumps(columns), data_as_of, result_id),
                 )
                 conn.commit()
                 row = conn.execute(
-                    "SELECT * FROM query_result WHERE result_id = ?", (result_id,)
+                    load_sql("results.select_query_result"), (result_id,)
                 ).fetchone()
-            return _summary(row, preview=_read_page(parquet, columns, 0, 20), data_as_of=data_as_of)
+            return _summary(row, preview=_read_page(parquet, columns, 0, result_preview_rows()), data_as_of=data_as_of)
 
     def abort(self, result_id: str) -> None:
         with self._result_lock(result_id):
@@ -163,7 +156,7 @@ class ResultStore:
         self._parquet_path(result_id).unlink(missing_ok=True)
         with self._connect() as conn:
             conn.execute(
-                "UPDATE query_result SET status = 'DELETED' WHERE result_id = ?",
+                load_sql("results.update_query_result_deleted"),
                 (result_id,),
             )
             conn.commit()
@@ -230,23 +223,23 @@ class ResultStore:
             ready_ids = [
                 r["result_id"]
                 for r in conn.execute(
-                    "SELECT result_id FROM query_result WHERE status = 'READY' AND expires_at <= ?",
+                    load_sql("results.select_ready_expired"),
                     (now_iso,),
                 )
             ]
             expired_ids = [
                 r["result_id"]
-                for r in conn.execute("SELECT result_id FROM query_result WHERE status = 'EXPIRED'")
+                for r in conn.execute(load_sql("results.select_expired_ids"))
             ]
             writing_ids = {
                 r["result_id"]
-                for r in conn.execute("SELECT result_id FROM query_result WHERE status = 'WRITING'")
+                for r in conn.execute(load_sql("results.select_writing_ids"))
             }
         for rid in ready_ids:
             with self._result_lock(rid):
                 with self._connect() as conn:
                     row = conn.execute(
-                        "SELECT status, expires_at FROM query_result WHERE result_id = ?",
+                        load_sql("results.select_status_expires"),
                         (rid,),
                     ).fetchone()
                     if row is None or row["status"] != "READY":
@@ -256,7 +249,7 @@ class ResultStore:
                     self._parquet_path(rid).unlink(missing_ok=True)
                     self._part_path(rid).unlink(missing_ok=True)
                     conn.execute(
-                        "UPDATE query_result SET status = 'EXPIRED' WHERE result_id = ?",
+                        load_sql("results.update_query_result_expired"),
                         (rid,),
                     )
                     conn.commit()
@@ -264,13 +257,13 @@ class ResultStore:
         for rid in expired_ids:
             with self._result_lock(rid), self._connect() as conn:
                 row = conn.execute(
-                    "SELECT status FROM query_result WHERE result_id = ?", (rid,)
+                    load_sql("results.select_status"), (rid,)
                 ).fetchone()
                 if row is None or row["status"] != "EXPIRED":
                     continue
                 self._parquet_path(rid).unlink(missing_ok=True)
                 conn.execute(
-                    "UPDATE query_result SET status = 'DELETED' WHERE result_id = ?",
+                    load_sql("results.update_query_result_deleted"),
                     (rid,),
                 )
                 conn.commit()
@@ -283,7 +276,7 @@ class ResultStore:
                     continue
                 with self._connect() as conn:
                     row = conn.execute(
-                        "SELECT status FROM query_result WHERE result_id = ?", (rid,)
+                        load_sql("results.select_status"), (rid,)
                     ).fetchone()
                 if row is None or row["status"] != "WRITING":
                     part.unlink(missing_ok=True)
@@ -291,14 +284,14 @@ class ResultStore:
     def _load_row(self, result_id: str) -> sqlite3.Row:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM query_result WHERE result_id = ?", (result_id,)
+                load_sql("results.select_query_result"), (result_id,)
             ).fetchone()
         if row is None:
             raise ResultStoreError(SkillErrorCode.REJECTED, f"unknown result: {result_id}")
         return row
 
     def _authorize(self, row: sqlite3.Row, ctx: RuntimeContext) -> None:
-        if ctx.tenant_id != _TENANT:
+        if ctx.tenant_id != tenant_id():
             raise ResultStoreError(SkillErrorCode.REJECTED, "tenant_id must be default")
         if ctx.user_id != row["user_id"]:
             raise ResultStoreError(SkillErrorCode.REJECTED, "not owner")

@@ -4,60 +4,12 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Engine
 
 from backend.app.config import load_settings
 from backend.app.mysql.pool import get_engine
-
-BUSINESS_TABLES = frozenset(
-    {
-        "dim_store",
-        "dim_user",
-        "dim_category",
-        "dim_sku",
-        "dim_channel",
-        "dim_campaign",
-        "fact_order",
-        "fact_order_item",
-        "fact_payment",
-        "fact_refund",
-        "fact_traffic",
-        "fact_ad_spend",
-    }
-)
-
-_TABLES_SQL = text(
-    """
-    SELECT TABLE_NAME AS table_name, TABLE_COMMENT AS comment
-    FROM INFORMATION_SCHEMA.TABLES
-    WHERE TABLE_SCHEMA = :db AND TABLE_TYPE = 'BASE TABLE'
-      AND TABLE_NAME IN :tables
-    """
-).bindparams(bindparam("tables", expanding=True))
-
-_COLUMNS_SQL = text(
-    """
-    SELECT TABLE_NAME AS table_name, COLUMN_NAME AS column_name,
-           DATA_TYPE AS data_type, COLUMN_COMMENT AS comment
-    FROM INFORMATION_SCHEMA.COLUMNS
-    WHERE TABLE_SCHEMA = :db AND TABLE_NAME IN :tables
-    ORDER BY TABLE_NAME, ORDINAL_POSITION
-    """
-).bindparams(bindparam("tables", expanding=True))
-
-_FK_SQL = text(
-    """
-    SELECT TABLE_NAME AS left_table, COLUMN_NAME AS left_col,
-           REFERENCED_TABLE_NAME AS right_table,
-           REFERENCED_COLUMN_NAME AS right_col
-    FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
-    WHERE TABLE_SCHEMA = :db
-      AND REFERENCED_TABLE_NAME IS NOT NULL
-      AND TABLE_NAME IN :tables
-      AND REFERENCED_TABLE_NAME IN :tables
-    """
-).bindparams(bindparam("tables", expanding=True))
+from backend.app.resources.domain import BUSINESS_TABLES
+from backend.app.resources.sql import load_sql, mysql_text
 
 
 def _as_dicts(result) -> list[dict[str, object]]:
@@ -83,28 +35,28 @@ def apply_information_schema(
     ]
     now = datetime.now(UTC).replace(microsecond=0).isoformat()
     with sqlite3.connect(path) as conn:
-        max_version = conn.execute("SELECT MAX(catalog_version) FROM catalog_meta").fetchone()[0]
+        max_version = conn.execute(load_sql("catalog.select_max_catalog_version")).fetchone()[0]
         new_version = int(max_version or 0) + 1
         for table in tables:
             name = str(table["table_name"])
             comment = table.get("comment") or None
             exists = conn.execute(
-                "SELECT 1 FROM schema_table WHERE table_name = ?", (name,)
+                load_sql("catalog.schema_table_exists"), (name,)
             ).fetchone()
             if exists:
                 conn.execute(
-                    "UPDATE schema_table SET comment = ? WHERE table_name = ?",
+                    load_sql("catalog.update_schema_table_comment"),
                     (comment, name),
                 )
             else:
                 conn.execute(
-                    "INSERT INTO schema_table VALUES (?, ?, ?, ?, ?, '[]')",
+                    load_sql("catalog.insert_schema_table"),
                     (name, name, "", comment or "", comment),
                 )
-        conn.execute("DELETE FROM schema_column")
+        conn.execute(load_sql("catalog.delete_schema_columns"))
         for column in columns:
             conn.execute(
-                "INSERT INTO schema_column VALUES (?, ?, ?, ?, '[]', 0)",
+                load_sql("catalog.insert_schema_column"),
                 (
                     column["table_name"],
                     column["column_name"],
@@ -112,10 +64,10 @@ def apply_information_schema(
                     column.get("comment") or None,
                 ),
             )
-        conn.execute("DELETE FROM schema_relation")
+        conn.execute(load_sql("catalog.delete_schema_relations"))
         for relation_id, fk in enumerate(foreign_keys, start=1):
             conn.execute(
-                "INSERT INTO schema_relation VALUES (?, ?, ?, ?, ?, 'many_to_one', 'fk', 1, 1)",
+                load_sql("catalog.insert_schema_relation"),
                 (
                     relation_id,
                     fk["left_table"],
@@ -125,7 +77,7 @@ def apply_information_schema(
                 ),
             )
         conn.execute(
-            "INSERT INTO catalog_meta VALUES (?, ?, ?, ?)",
+            load_sql("catalog.insert_catalog_meta"),
             (new_version, mysql_database, now, "sync_from_mysql"),
         )
         conn.commit()
@@ -145,9 +97,15 @@ def sync_from_mysql(
     table_names = sorted(BUSINESS_TABLES)
     params = {"db": mysql_database, "tables": table_names}
     with eng.connect() as conn:
-        tables = _as_dicts(conn.execute(_TABLES_SQL, params))
-        columns = _as_dicts(conn.execute(_COLUMNS_SQL, params))
-        foreign_keys = _as_dicts(conn.execute(_FK_SQL, params))
+        tables = _as_dicts(
+            conn.execute(mysql_text("catalog.mysql_information_schema_tables", expanding=("tables",)), params)
+        )
+        columns = _as_dicts(
+            conn.execute(mysql_text("catalog.mysql_information_schema_columns", expanding=("tables",)), params)
+        )
+        foreign_keys = _as_dicts(
+            conn.execute(mysql_text("catalog.mysql_information_schema_fks", expanding=("tables",)), params)
+        )
     return apply_information_schema(
         path,
         tables=tables,

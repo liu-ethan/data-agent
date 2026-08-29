@@ -14,11 +14,19 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from scripts.init_sqlite import ALL_METRICS, ALL_TABLES
+from backend.app.resources.domain import (
+    ALL_METRICS,
+    ALL_TABLES,
+    jwt_algorithm,
+    load_write_ops_raw,
+    mysql_database,
+    pbkdf2_iterations,
+    tenant_id,
+    ui_meta,
+)
+from backend.app.resources.sql import load_sql
 
 router = APIRouter()
-
-_WRITE_OPS = ["update_sku_status", "adjust_sku_inventory"]
 
 
 class LoginRequest(BaseModel):
@@ -50,13 +58,13 @@ class UserInfo(BaseModel):
 
 def hash_password(password: str, salt: str | None = None) -> str:
     salt = salt or secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120000).hex()
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), pbkdf2_iterations()).hex()
     return f"{salt}${digest}"
 
 
 def verify_password(password: str, stored: str) -> bool:
     salt, expected = stored.split("$", 1)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120000).hex()
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), pbkdf2_iterations()).hex()
     return hmac.compare_digest(digest, expected)
 
 
@@ -69,13 +77,11 @@ def _fetch_user(users_db: Path, *, username: str | None = None, user_id: str | N
         conn.row_factory = sqlite3.Row
         if username is not None:
             return conn.execute(
-                """SELECT user_id, username, password_hash, display_name, role
-                   FROM app_user WHERE username = ? AND is_active = 1""",
+                load_sql("auth.select_user_by_username"),
                 (username,),
             ).fetchone()
         return conn.execute(
-            """SELECT user_id, username, password_hash, display_name, role
-               FROM app_user WHERE user_id = ? AND is_active = 1""",
+            load_sql("auth.select_user_by_id"),
             (user_id,),
         ).fetchone()
 
@@ -103,7 +109,7 @@ def issue_token(user: UserInfo, request: Request) -> str:
         "iat": now,
         "exp": now + ttl,
     }
-    return jwt.encode(payload, request.app.state.jwt_secret, algorithm="HS256")
+    return jwt.encode(payload, request.app.state.jwt_secret, algorithm=jwt_algorithm())
 
 
 def _login_response(user: UserInfo, request: Request) -> LoginResponse:
@@ -123,7 +129,7 @@ def get_current_user(request: Request) -> UserInfo:
         raise HTTPException(status_code=401, detail="not authenticated")
     token = header.removeprefix("Bearer ").strip()
     try:
-        payload = jwt.decode(token, request.app.state.jwt_secret, algorithms=["HS256"])
+        payload = jwt.decode(token, request.app.state.jwt_secret, algorithms=[jwt_algorithm()])
     except jwt.PyJWTError as exc:
         raise HTTPException(status_code=401, detail="not authenticated") from exc
     user_id = payload.get("sub")
@@ -154,32 +160,29 @@ def register(body: RegisterRequest, request: Request) -> LoginResponse:
         raise HTTPException(status_code=422, detail="username required")
     now = datetime.now(UTC).replace(microsecond=0).isoformat()
     user_id = str(uuid.uuid4())
-    write_ops = _WRITE_OPS if body.role == "operator" else []
+    write_ops = (
+        [item["operation_type"] for item in load_write_ops_raw()] if body.role == "operator" else []
+    )
     try:
         with sqlite3.connect(users_db) as conn:
             conn.execute(
-                """INSERT INTO app_user
-                   (user_id, username, password_hash, display_name, role, tenant_id, is_active, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, 1, ?)""",
+                load_sql("auth.insert_app_user"),
                 (
                     user_id,
                     username,
                     hash_password(body.password),
                     username,
                     body.role,
-                    "default",
+                    tenant_id(),
                     now,
                 ),
             )
             conn.execute(
-                """INSERT INTO user_permission
-                   (user_id, permission_version, allowed_tables_json, allowed_columns_json,
-                    allowed_metrics_json, allowed_write_ops_json, updated_at)
-                   VALUES (?, 1, ?, ?, ?, ?, ?)""",
+                load_sql("auth.insert_user_permission"),
                 (
                     user_id,
                     json.dumps(ALL_TABLES),
-                    json.dumps([f"data-agent-ecommerce.{t}.*" for t in ALL_TABLES]),
+                    json.dumps([f"{mysql_database()}.{t}.*" for t in ALL_TABLES]),
                     json.dumps(ALL_METRICS),
                     json.dumps(write_ops),
                     now,
@@ -192,6 +195,11 @@ def register(body: RegisterRequest, request: Request) -> LoginResponse:
     if row is None:
         raise HTTPException(status_code=500, detail="register failed")
     return _login_response(_to_user(row), request)
+
+
+@router.get("/api/meta")
+def meta() -> dict:
+    return ui_meta()
 
 
 @router.get("/api/auth/me", response_model=UserInfo)

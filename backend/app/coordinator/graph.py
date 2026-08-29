@@ -11,8 +11,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, RunnableConfig
 
 from backend.app.catalog.models import CatalogSnapshot
-from backend.app.coordinator.candidates import lookup_metrics, lookup_products, lookup_time_range
+from backend.app.coordinator.candidates import enrich_hitl, lookup_metrics, lookup_products, lookup_time_range
 from backend.app.coordinator.hitl import interrupt_hitl as interrupt
+from backend.app.coordinator.progress import emit_think
 from backend.app.coordinator.intent import (
     IntentDraft,
     build_query_task,
@@ -22,9 +23,12 @@ from backend.app.coordinator.intent import (
 )
 from backend.app.coordinator.respond import (
     build_response_prompt,
+    empty_result_answer,
     facts_from_summary,
     ground_answer,
 )
+from backend.app.resources.domain import empty_thread_title, tenant_id as default_tenant_id
+from backend.app.resources.sql import load_sql
 from backend.app.results.store import ResultStore, ResultStoreError
 from backend.app.types import (
     Intent,
@@ -75,12 +79,8 @@ def upsert_thread(
 ) -> None:
     with sqlite3.connect(runtime_db) as conn:
         conn.execute(
-            """INSERT INTO thread (thread_id, user_id, title, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(thread_id) DO UPDATE SET
-                 user_id = excluded.user_id,
-                 updated_at = excluded.updated_at""",
-            (thread_id, user_id, title or "新会话", now, now),
+            load_sql("threads.upsert_thread"),
+            (thread_id, user_id, title or empty_thread_title(), now, now),
         )
         conn.commit()
 
@@ -159,7 +159,7 @@ def build_coordinator_graph(
         else:
             perms = reload_fn(user_id)
         return RuntimeContext(
-            tenant_id=conf.get("tenant_id", "default"),
+            tenant_id=conf.get("tenant_id", default_tenant_id()),
             user_id=user_id,
             role=perms.role,
             request_time_utc=conf["request_time_utc"],
@@ -171,7 +171,7 @@ def build_coordinator_graph(
     def start_node(state: CoordinatorState, config: RunnableConfig) -> dict[str, Any]:
         ctx = make_ctx(config)
         if runtime_db is not None:
-            upsert_thread(runtime_db, ctx.thread_id, ctx.user_id, "新会话", _now_iso())
+            upsert_thread(runtime_db, ctx.thread_id, ctx.user_id, empty_thread_title(), _now_iso())
         parent = state.get("parent_query_task")
         prev = state.get("query_task")
         if prev is not None and state.get("result_id"):
@@ -191,6 +191,7 @@ def build_coordinator_graph(
         }
 
     def plan_node(state: CoordinatorState, config: RunnableConfig) -> dict[str, Any]:
+        emit_think("plan")
         ctx = make_ctx(config)
         parent = state.get("parent_query_task")
         draft: IntentDraft = llm.classify_intent(
@@ -212,6 +213,7 @@ def build_coordinator_graph(
                 metrics_fn=metrics_fn,
                 time_fn=time_fn,
                 user_message=state.get("message") or "",
+                llm=llm,
             )
             return updates
         if intent in (Intent.QUERY, Intent.FOLLOWUP):
@@ -224,16 +226,24 @@ def build_coordinator_graph(
             return updates
         object_ids, hitl = _resolve_write_objects(draft, ctx, store, state.get("result_id"))
         if hitl is not None:
-            updates["hitl"] = hitl
+            updates["hitl"] = enrich_hitl(
+                hitl,
+                catalog=catalog,
+                permissions=ctx.permissions,
+                llm=llm,
+                user_message=state.get("message") or "",
+            )
             return updates
         updates["write_task"] = build_write_task(draft, ctx, object_ids)
         return updates
 
     def run_query_node(state: CoordinatorState, config: RunnableConfig) -> dict[str, Any]:
+        emit_think("run_query")
         ctx = make_ctx(config)
         task = state["query_task"]
         assert query_fn is not None
         result = query_fn(task, ctx, parent_task=state.get("parent_query_task"))
+        user_message = state.get("message") or ""
         if result.ok and result.result is not None:
             return {
                 "result_id": result.result.result_id,
@@ -241,21 +251,44 @@ def build_coordinator_graph(
                 "error_message": None,
                 "hitl": None,
             }
+        if result.error_message == "metric_ids required":
+            return {
+                "error_code": None,
+                "error_message": None,
+                "hitl": _clarify_hitl(
+                    IntentDraft(intent=Intent.CLARIFY, clarify_kind="metric"),
+                    ctx,
+                    catalog,
+                    products_fn=products_fn,
+                    metrics_fn=metrics_fn,
+                    time_fn=time_fn,
+                    user_message=user_message,
+                    llm=llm,
+                ),
+            }
         code = result.error_code
         if code in (
             SkillErrorCode.SCHEMA_GAP,
             SkillErrorCode.AMBIGUOUS,
             SkillErrorCode.TOO_BROAD,
+            SkillErrorCode.UNSAFE_SQL,
         ):
+            hitl = {
+                "kind": "query_error",
+                "error_code": None if code is None else code.value,
+                "error_message": result.error_message,
+                **(result.hitl or {}),
+            }
             return {
                 "error_code": None if code is None else code.value,
                 "error_message": result.error_message,
-                "hitl": {
-                    "kind": "query_error",
-                    "error_code": None if code is None else code.value,
-                    "error_message": result.error_message,
-                    **(result.hitl or {}),
-                },
+                "hitl": enrich_hitl(
+                    hitl,
+                    catalog=catalog,
+                    permissions=ctx.permissions,
+                    llm=llm,
+                    user_message=user_message,
+                ),
             }
         return {
             "error_code": None if code is None else code.value,
@@ -264,6 +297,7 @@ def build_coordinator_graph(
         }
 
     def prepare_node(state: CoordinatorState, config: RunnableConfig) -> dict[str, Any]:
+        emit_think("prepare_write")
         ctx = make_ctx(config)
         task = state["write_task"]
         assert prepare_fn is not None and task is not None
@@ -289,9 +323,11 @@ def build_coordinator_graph(
         }
 
     def hitl_node(state: CoordinatorState) -> dict[str, Any]:
+        emit_think("hitl")
         return {"hitl_resume": interrupt(state.get("hitl"))}
 
     def execute_node(state: CoordinatorState, config: RunnableConfig) -> dict[str, Any]:
+        emit_think("execute_write")
         ctx = make_ctx(config)
         resume = state.get("hitl_resume") or {}
         if resume.get("user_id") and resume.get("user_id") != ctx.user_id:
@@ -324,6 +360,7 @@ def build_coordinator_graph(
         }
 
     def respond_node(state: CoordinatorState, config: RunnableConfig) -> dict[str, Any]:
+        emit_think("respond")
         if state.get("answer"):
             return {}
         ctx = make_ctx(config)
@@ -343,6 +380,9 @@ def build_coordinator_graph(
         result_id = state.get("result_id")
         if result_id and not state.get("error_code"):
             summary = store.read_page(result_id, ctx)
+            empty = empty_result_answer(summary)
+            if empty:
+                return {"answer": empty}
             facts = facts_from_summary(summary)
             prompt_text = build_response_prompt(facts)
             raw = llm.compose_answer(prompt_text, facts)
@@ -431,6 +471,7 @@ def _clarify_hitl(
     metrics_fn: LookupFn | None,
     time_fn: LookupFn | None,
     user_message: str = "",
+    llm: Any | None = None,
 ) -> dict[str, Any]:
     query = draft.clarify_query or user_message
     if draft.clarify_kind == "metric":
@@ -451,7 +492,13 @@ def _clarify_hitl(
     if not candidates:
         payload["status"] = "not_found"
         payload["message"] = "未查到"
-    return payload
+    return enrich_hitl(
+        payload,
+        catalog=catalog,
+        permissions=ctx.permissions,
+        llm=llm,
+        user_message=user_message,
+    )
 
 
 def _resolve_write_objects(

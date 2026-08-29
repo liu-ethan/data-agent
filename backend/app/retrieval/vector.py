@@ -8,7 +8,7 @@ from typing import Protocol
 
 from backend.app.catalog.models import CatalogSnapshot
 from backend.app.retrieval.bm25 import Hit, column_doc, table_doc
-from scripts.init_sqlite import SQL_DIR, apply_sql
+from backend.app.resources.sql import SQLITE_DDL_DIR, apply_sql, load_sql
 
 
 class Embedder(Protocol):
@@ -38,7 +38,7 @@ def _cosine(left: list[float], right: list[float]) -> float:
 def _connect(embeddings_db: str | Path) -> sqlite3.Connection:
     path = Path(embeddings_db)
     if not path.exists() or path.stat().st_size == 0:
-        apply_sql(path, SQL_DIR / "embeddings.sql")
+        apply_sql(path, SQLITE_DDL_DIR / "embeddings.sql")
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -53,22 +53,18 @@ def ensure_index(
     if embedder is None:
         return
     with _connect(embeddings_db) as conn:
-        row = conn.execute(
-            "SELECT catalog_version FROM embedding_manifest ORDER BY id DESC LIMIT 1"
-        ).fetchone()
+        row = conn.execute(load_sql("embeddings.select_manifest_version")).fetchone()
         if row is not None and int(row[0]) == catalog.catalog_version:
             return
-        conn.execute("DELETE FROM table_embedding")
-        conn.execute("DELETE FROM column_embedding")
-        conn.execute("DELETE FROM embedding_manifest")
+        conn.execute(load_sql("embeddings.delete_table_embedding"))
+        conn.execute(load_sql("embeddings.delete_column_embedding"))
+        conn.execute(load_sql("embeddings.delete_embedding_manifest"))
         table_names = [t.table_name for t in catalog.tables]
         table_texts = [table_doc(t) for t in catalog.tables]
         table_vecs = embedder.embed(table_texts) if table_texts else []
         for name, text, vec in zip(table_names, table_texts, table_vecs):
             conn.execute(
-                """INSERT INTO table_embedding
-                   (table_name, catalog_version, text, vector)
-                   VALUES (?, ?, ?, ?)""",
+                load_sql("embeddings.insert_table_embedding"),
                 (name, catalog.catalog_version, text, _pack(vec)),
             )
         col_rows = [
@@ -77,15 +73,12 @@ def ensure_index(
         col_vecs = embedder.embed([row[2] for row in col_rows]) if col_rows else []
         for (table_name, column_name, text), vec in zip(col_rows, col_vecs):
             conn.execute(
-                """INSERT INTO column_embedding
-                   (table_name, column_name, catalog_version, text, vector)
-                   VALUES (?, ?, ?, ?, ?)""",
+                load_sql("embeddings.insert_column_embedding"),
                 (table_name, column_name, catalog.catalog_version, text, _pack(vec)),
             )
         dim = len(table_vecs[0]) if table_vecs else (len(col_vecs[0]) if col_vecs else 0)
         conn.execute(
-            """INSERT INTO embedding_manifest (model, dim, catalog_version, built_at)
-               VALUES (?, ?, ?, datetime('now'))""",
+            load_sql("embeddings.insert_embedding_manifest"),
             ("injected", dim, catalog.catalog_version),
         )
         conn.commit()
@@ -104,8 +97,7 @@ def search_tables(
     qvec = embedder.embed([query])[0]
     with _connect(embeddings_db) as conn:
         rows = conn.execute(
-            """SELECT table_name, vector FROM table_embedding
-               WHERE catalog_version = ?""",
+            load_sql("embeddings.select_table_embeddings"),
             (catalog_version,),
         ).fetchall()
     scored = [(name, _cosine(qvec, _unpack(blob))) for name, blob in rows]
@@ -125,8 +117,7 @@ def search_columns(
     if embedder is None or top_k <= 0:
         return []
     qvec = embedder.embed([query])[0]
-    sql = """SELECT table_name, column_name, vector FROM column_embedding
-             WHERE catalog_version = ?"""
+    sql = load_sql("embeddings.select_column_embeddings")
     params: list[object] = [catalog_version]
     with _connect(embeddings_db) as conn:
         rows = conn.execute(sql, params).fetchall()

@@ -11,11 +11,13 @@ function colorFor(id: string): string {
 export function ThreadList({
   threads,
   currentId,
+  emptyTitle,
   onSelect,
   onDelete,
 }: {
   threads: Thread[]
   currentId?: string
+  emptyTitle: string
   onSelect: (id: string) => void
   onDelete: (id: string) => void
 }) {
@@ -28,12 +30,12 @@ export function ThreadList({
         <li key={thread.thread_id} className={thread.thread_id === currentId ? 'current' : ''}>
           <button type="button" className="thread-open" onClick={() => onSelect(thread.thread_id)}>
             <span className="thread-dot" style={{background: colorFor(thread.thread_id)}} />
-            <span className="thread-title">{thread.title || '新会话'}</span>
+            <span className="thread-title">{thread.title || emptyTitle}</span>
           </button>
           <button
             type="button"
             className="thread-delete"
-            aria-label={`删除 ${thread.title || '新会话'}`}
+            aria-label={`删除 ${thread.title || emptyTitle}`}
             onClick={() => {
               if (window.confirm('删除这个对话？')) onDelete(thread.thread_id)
             }}

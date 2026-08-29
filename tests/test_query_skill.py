@@ -415,6 +415,20 @@ def test_empty_llm_skeleton_still_compiles_task_metrics(store):
     assert params.get("limit") != 0
 
 
+def test_ground_skeleton_uses_task_dimensions_not_llm_group_by():
+    from backend.app.skills.query.graph import _ground_skeleton
+
+    task = _task(dimensions=["dim_category.cat_name"])
+    skeleton = _skeleton(
+        group_by=["dim_category.category_name"],
+        select_dims=["dim_category.category_name"],
+    )
+    grounded = _ground_skeleton(task, _bundle(), skeleton, [_gmv()])
+    assert grounded.group_by == ["dim_category.cat_name"]
+    assert grounded.select_dims == ["dim_category.cat_name"]
+    assert "category_name" not in grounded.group_by
+
+
 def test_gateway_reject_does_not_execute_mysql(store):
     ctx = _ctx(extra_tables=["dim_user"], extra_columns=["dim_user.nick_name"])
     catalog = _catalog(sensitive_nick=True)

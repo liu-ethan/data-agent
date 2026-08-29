@@ -214,6 +214,104 @@ def test_schema_gap_from_query_skill_interrupts_in_coordinator(tmp_path, store):
     payload = _interrupt_payload(_invoke(graph, "查库存周转", ctx))
     assert payload.get("error_code") == SkillErrorCode.SCHEMA_GAP.value
     assert "仓储表" in str(payload)
+    assert payload.get("message")
+    assert "dim_" not in (payload.get("message") or "")
+    assert payload.get("candidates")
+    assert {item["id"] for item in payload["candidates"]} <= {"gmv", "refund_rate"}
+
+
+def test_unsafe_sql_interrupts_without_gateway_english(tmp_path, store):
+    from backend.app.coordinator.intent import IntentDraft
+
+    ctx = _ctx()
+
+    def run_query(task, ctx, **kwargs):
+        return QuerySkillResult(
+            ok=False,
+            error_code=SkillErrorCode.UNSAFE_SQL,
+            error_message="column is not in the task allowlist",
+        )
+
+    llm = FakeCoordinatorLlm(
+        {
+            "各品类 GMV": IntentDraft(
+                intent=Intent.QUERY,
+                metric_ids=["gmv"],
+                dimensions=["dim_category.cat_name"],
+            )
+        }
+    )
+    graph = _graph(tmp_path, store, llm, ctx, run_query)
+    payload = _interrupt_payload(_invoke(graph, "各品类 GMV", ctx))
+    assert payload.get("kind") == "query_error"
+    assert payload.get("error_code") == SkillErrorCode.UNSAFE_SQL.value
+    assert "allowlist" not in (payload.get("message") or "").lower()
+    assert payload.get("candidates")
+
+
+def test_schema_gap_uses_llm_labels_and_drops_invented_ids(tmp_path, store):
+    from backend.app.coordinator.intent import IntentDraft
+
+    ctx = _ctx()
+
+    def run_query(task, ctx, **kwargs):
+        return QuerySkillResult(
+            ok=False,
+            error_code=SkillErrorCode.SCHEMA_GAP,
+            error_message="dim_category.category_name",
+            hitl={"schema_gap": {"missing_concept": "dim_category.category_name"}},
+        )
+
+    llm = FakeCoordinatorLlm(
+        {
+            "各品类销售对比": IntentDraft(
+                intent=Intent.QUERY,
+                metric_ids=["gmv"],
+                dimensions=["dim_category.category_name"],
+            )
+        },
+        clarify_reply={
+            "message": "想看各品类的哪项数据？",
+            "candidates": [
+                {"id": "gmv", "label": "各品类 GMV"},
+                {"id": "invented", "label": "仓储周转"},
+            ],
+        },
+    )
+    graph = _graph(tmp_path, store, llm, ctx, run_query)
+    payload = _interrupt_payload(_invoke(graph, "各品类销售对比", ctx))
+    assert payload["message"] == "想看各品类的哪项数据？"
+    assert [item["id"] for item in payload["candidates"]] == ["gmv"]
+    assert payload["candidates"][0]["label"] == "各品类 GMV"
+    assert llm.clarify_payloads
+
+
+def test_missing_metric_ids_interrupts_with_metric_buttons(tmp_path, store):
+    from backend.app.coordinator.intent import IntentDraft
+
+    ctx = _ctx()
+
+    def run_query(task, ctx, **kwargs):
+        return QuerySkillResult(
+            ok=False,
+            error_code=SkillErrorCode.REJECTED,
+            error_message="metric_ids required",
+        )
+
+    llm = FakeCoordinatorLlm(
+        {
+            "各品类销售": IntentDraft(
+                intent=Intent.QUERY,
+                dimensions=["dim_category.cat_name"],
+            )
+        }
+    )
+    graph = _graph(tmp_path, store, llm, ctx, run_query)
+    payload = _interrupt_payload(_invoke(graph, "各品类销售", ctx))
+    assert payload.get("kind") == "clarify"
+    assert payload.get("clarify_kind") == "metric"
+    assert any(item["id"] == "gmv" for item in payload.get("candidates") or [])
+    assert payload.get("message")
 
 
 def test_hitl_resume_does_not_reresolve_time(tmp_path, store):

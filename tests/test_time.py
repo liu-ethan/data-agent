@@ -39,12 +39,13 @@ def test_last_7_days_includes_today():
     assert tr.grain == "day"
 
 
-def test_missing_text_defaults_to_today_from_request_time():
+def test_missing_text_defaults_to_this_month_from_request_time():
     tr = resolve_time_range(None, "2026-08-28T16:00:00+00:00", "Asia/Shanghai")
-    assert tr.start == "2026-08-29T00:00:00+08:00"
-    assert tr.end == "2026-08-30T00:00:00+08:00"
+    assert tr.start == "2026-08-01T00:00:00+08:00"
+    assert tr.end == "2026-09-01T00:00:00+08:00"
     assert tr.source == "server_default"
-    assert tr.grain == "day"
+    assert tr.grain == "month"
+    assert tr.label == "2026-08"
 
 
 def test_same_request_time_is_deterministic():

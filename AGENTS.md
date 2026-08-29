@@ -1,26 +1,22 @@
 # data-agent
 
-电商问数：单 Coordinator + 查询 Skill + 写入 Skill。先读边界，再做当前 Task，不要扩大范围。
+电商问数：单 Coordinator + 查询 Skill + 写入 Skill。先读边界，再最小改动。
 
 ## 文件
 
 | 路径 | 作用 |
 | --- | --- |
-| `plan/development-notes.md` | **总边界。** 不变量、存储/模块所有权、契约、禁止项。与任何 Task/聊天冲突时以它为准。 |
-| `plan/tasks/NN-*.md` | **当前 Task。** 只改 Owns/In。Out、Must not 强制。 |
-| `plan/implementation-plan.md` | Task 索引与依赖。 |
 | `docs/` | 产品规格。只用当前分支，禁止混用 `system-upgrade` 的 `docs/specs`。 |
-| `backend/app/types.py` | 跨模块契约（形状锁在 development-notes §9）。改契约先改 notes 再改代码。 |
-
-未列出的路径不要新建。文件地图见 development-notes §10。
+| `docs/development-notes.md` | 不变量、存储边界、契约。 |
+| `backend/app/types.py` | 跨模块契约。改契约先改文档再改代码。 |
+| `prompts/` | 全部 LLM Prompt（身份 / 任务 / 约束 / 输出 / few-shots）。 |
+| `sql/` | MySQL/SQLite DDL 与命名查询。禁止把静态 SQL 再写进 Python。 |
+| `seeds/` | 切片表、指标、写入模板、产品文案。唯一业务常量源。 |
+| `backend/app/resources/` | Prompt / SQL / 域常量加载器。 |
 
 ## 实现
 
 Python：`/home/user/miniconda3/envs/python3.12`（`bin/python` / `bin/pip`）。不要用系统 python。
-
-1. 读 `development-notes.md`。
-2. 打开对应 `plan/tasks/NN-*.md`，只做这一份。
-3. 先写失败测试，再最小实现。不要提前做后续 Task。
 
 连通性：`/home/user/miniconda3/envs/python3.12/bin/python scripts/check_connectivity.py`（也可单独跑 `check_mysql.py` / `check_sqlite.py` / `check_llm.py` / `check_embedding.py`）。不写业务行、不往 embeddings.sqlite 落向量。
 

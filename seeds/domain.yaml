@@ -1,0 +1,102 @@
+# 产品域常量。不要在 Python 里再抄一份。
+tenant_id: default
+mysql_database: data-agent-ecommerce
+empty_thread_title: 新会话
+title_max_chars: 10
+greeting: 想查哪一块经营数据？
+suggested_questions:
+  - 本月 GMV 是多少？
+  - 各品类销售对比
+  - 本月退款率如何？
+role_labels:
+  operator: 管理员
+  analyst: 分析师
+login:
+  eyebrow: 电商经营分析
+  headline: 用一句话问经营数字
+  lead: 问数对着订单、商品、流量与售后切片作答。分析师查 GMV、品类对比和退款率；改 SKU 状态或库存，必须管理员当场确认。
+  ticker_caption: 可问指标 · 口径已锁定
+  capabilities:
+    - title: 问得出口径
+      body: GMV、客单价、退款率走已审核公式，模型不能现场编算法。
+    - title: 查得到对比
+      body: 按品类、店铺、时间窗取数。缺条件时把可选答案做成按钮，点一下就能继续。
+    - title: 改得有人点头
+      body: 下架或调库存先出预览，管理员确认后才写，单次最多 100 行。
+think_steps:
+  start:
+    label: 收到问题
+    text: 正在读取本轮会话，准备判断意图。
+  plan:
+    label: 理解意图
+    text: 正在判断这是查询、写入，还是需要补充条件。
+  run_query:
+    label: 查数
+    text: 正在对照指标与表结构，编译并执行只读查询。
+  followup:
+    label: 跟进上一轮
+    text: 判断是筛选已有结果，还是需要重新查询。
+  q01_coverage:
+    label: 核对指标
+    text: 检查指标、权限是否覆盖当前问题。
+  q02_rag:
+    label: 检索表结构
+    text: 正在匹配相关业务表与字段。
+  q08_skeleton:
+    label: 生成查询骨架
+    text: 正在确定维度、过滤与时间窗。
+  q09_compile:
+    label: 编译指标
+    text: 正在用已审核公式生成 SQL。
+  q10_gateway:
+    label: 安全检查
+    text: 正在检查只读 SQL 是否越权。
+  q11_execute:
+    label: 执行查询
+    text: 正在查询经营事实表。
+  prepare_write:
+    label: 写入预览
+    text: 正在生成变更预览，提交前会请你确认。
+  hitl:
+    label: 等待确认
+    text: 需要你选择或确认后才能继续。
+  execute_write:
+    label: 提交写入
+    text: 正在按已确认的范围提交变更。
+  respond:
+    label: 整理回答
+    text: 正在把结果写成可读结论。
+paid_statuses:
+  - paid
+  - shipped
+  - completed
+sku_status_values:
+  - on_sale
+  - off_sale
+write_max_affected_rows: 100
+query_max_repairs: 2
+result_preview_rows: 20
+sku_search_limit: 20
+pbkdf2_iterations: 120000
+jwt_algorithm: HS256
+time_presets:
+  this_month: 本月
+  "this month": 本月
+  today: 今天
+  yesterday: 昨天
+  last_7_days: 近7天
+  last7days: 近7天
+empty_text:
+  - ""
+  - "none"
+  - "null"
+  - "n/a"
+  - "nil"
+  - "-"
+dimension_aliases:
+  dim_category.category_name: dim_category.cat_name
+control_tables:
+  - da_write_receipt
+  - da_write_audit
+writable_tables:
+  - dim_sku

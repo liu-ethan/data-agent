@@ -10,10 +10,10 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from backend.app.gateway.write_policy import check_write_sql
+from backend.app.resources.domain import writable_tables
+from backend.app.resources.sql import load_sql, mysql_text
 from backend.app.skills.write.registry import PreparedCommand, load_write_ops
 from backend.app.types import RuntimeContext, SkillErrorCode
-
-_ALLOWED_TABLES = frozenset({"dim_sku"})
 
 
 class ExecuteWriteError(Exception):
@@ -66,7 +66,7 @@ def _reject_if_invalid(cmd: PreparedCommand) -> None:
     decision = check_write_sql(cmd.sql, cmd.params, op)
     if not decision.ok:
         raise ExecuteWriteError(SkillErrorCode.UNSAFE_SQL, decision.reason or "gateway rejected")
-    if cmd.target_table not in _ALLOWED_TABLES:
+    if cmd.target_table not in writable_tables():
         raise ExecuteWriteError(SkillErrorCode.UNSAFE_SQL, "table is not writable")
 
 
@@ -77,11 +77,7 @@ def _commit(cmd: PreparedCommand, ctx: RuntimeContext, engine: Engine, *, _retry
         try:
             try:
                 conn.execute(
-                    text(
-                        "INSERT INTO da_write_receipt "
-                        "(operation_id, request_hash, operation_type, status, payload_json) "
-                        "VALUES (:operation_id, :request_hash, :operation_type, :status, :payload_json)"
-                    ),
+                    mysql_text("write.insert_write_receipt"),
                     {
                         "operation_id": cmd.operation_id,
                         "request_hash": cmd.request_hash,
@@ -107,13 +103,7 @@ def _commit(cmd: PreparedCommand, ctx: RuntimeContext, engine: Engine, *, _retry
             affected = int(result.rowcount or 0)
             audit_id = str(uuid.uuid4())
             conn.execute(
-                text(
-                    "INSERT INTO da_write_audit "
-                    "(audit_id, operation_id, actor_user_id, operation_type, "
-                    "target_table, target_pk, before_json, after_json) "
-                    "VALUES (:audit_id, :operation_id, :actor_user_id, :operation_type, "
-                    ":target_table, :target_pk, :before_json, :after_json)"
-                ),
+                mysql_text("write.insert_write_audit"),
                 {
                     "audit_id": audit_id,
                     "operation_id": cmd.operation_id,
@@ -126,11 +116,7 @@ def _commit(cmd: PreparedCommand, ctx: RuntimeContext, engine: Engine, *, _retry
                 },
             )
             conn.execute(
-                text(
-                    "UPDATE da_write_receipt "
-                    "SET status = :status, affected_rows = :affected_rows, audit_id = :audit_id "
-                    "WHERE operation_id = :operation_id"
-                ),
+                mysql_text("write.update_write_receipt_committed"),
                 {
                     "operation_id": cmd.operation_id,
                     "status": "committed",
@@ -159,7 +145,9 @@ def _commit(cmd: PreparedCommand, ctx: RuntimeContext, engine: Engine, *, _retry
 
 def _reverify(conn: Any, cmd: PreparedCommand) -> list[dict[str, Any]]:
     table = cmd.target_table
-    sql = f"SELECT id, row_version, status, inventory_qty FROM `{table}` WHERE id IN :ids FOR UPDATE"
+    if table not in writable_tables():
+        raise ExecuteWriteError(SkillErrorCode.UNSAFE_SQL, "table is not writable")
+    sql = load_sql("write.lock_target_rows", table=table)
     rows = [
         dict(row)
         for row in conn.execute(_bound(sql, cmd.params), {"ids": cmd.params["ids"]}).mappings().all()
@@ -204,11 +192,7 @@ def _read_receipt(engine: Engine, cmd: PreparedCommand) -> WriteReceipt | None:
     with engine.connect() as conn:
         row = (
             conn.execute(
-                text(
-                    "SELECT operation_id, request_hash, operation_type, status, "
-                    "affected_rows, audit_id FROM da_write_receipt "
-                    "WHERE operation_id = :operation_id"
-                ),
+                mysql_text("write.select_write_receipt"),
                 {"operation_id": cmd.operation_id},
             )
             .mappings()

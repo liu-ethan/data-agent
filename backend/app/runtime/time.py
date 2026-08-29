@@ -32,7 +32,12 @@ def resolve_time_range(text: str | None, request_time_utc: str, timezone: str) -
     key = (text or "").strip()
     source: Literal["user", "server_default"] = "server_default" if not key else "user"
 
-    if not key or key in ("今天", "今日"):
+    if not key or key == "本月":
+        start = today.replace(day=1)
+        end = _next_month(start)
+        grain = "month"
+        label = f"{start.year:04d}-{start.month:02d}"
+    elif key in ("今天", "今日"):
         start = today
         end = today + timedelta(days=1)
         grain = "day"
@@ -42,11 +47,6 @@ def resolve_time_range(text: str | None, request_time_utc: str, timezone: str) -
         end = today
         grain = "day"
         label = start.date().isoformat()
-    elif key == "本月":
-        start = today.replace(day=1)
-        end = _next_month(start)
-        grain = "month"
-        label = f"{start.year:04d}-{start.month:02d}"
     elif key in ("近7天", "最近7天", "过去7天"):
         start = today - timedelta(days=6)
         end = today + timedelta(days=1)

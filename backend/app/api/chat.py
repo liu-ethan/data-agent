@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import sqlite3
+import threading
 import uuid
 from datetime import UTC, datetime
 from typing import Any
-
-import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ValidationError
 
 from backend.app.api.auth import CurrentUser
 from backend.app.coordinator.graph import upsert_thread
+from backend.app.coordinator.progress import think_listener
+from backend.app.resources.domain import empty_thread_title, tenant_id, think_steps, title_max_chars
+from backend.app.resources.prompts import render_prompt
+from backend.app.resources.sql import load_sql
 from backend.app.runtime.context import build_runtime_context
 from backend.app.types import RuntimeContext
 
@@ -57,7 +61,7 @@ def request_time(request: Request) -> str:
 def owned_thread(request: Request, thread_id: str, user_id: str) -> None:
     with sqlite3.connect(request.app.state.runtime_db) as conn:
         row = conn.execute(
-            "SELECT user_id FROM thread WHERE thread_id = ?",
+            load_sql("threads.select_thread_owner"),
             (thread_id,),
         ).fetchone()
     if row is None or row[0] != user_id:
@@ -80,38 +84,18 @@ def clip_title(text: str) -> str:
 
     cleaned = "".join(ch for ch in strip_reasoning(text) if ch not in _PUNCT)
     cleaned = "".join(cleaned.split())
-    return cleaned[:10] or "新会话"
+    return cleaned[: title_max_chars()] or empty_thread_title()
 
 
 def default_title_fn(message: str) -> str:
     try:
         from backend.app.config import load_settings
+        from backend.app.llm.client import ChatLlm
 
-        settings = load_settings()
-        url = settings.llm.base_url.rstrip("/") + "/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {settings.llm.api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": settings.llm.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": (
-                        "用不超过10个字概括下面这个问题，不要标点、不要引号，只输出标题：\n"
-                        + message
-                    ),
-                }
-            ],
-            "max_tokens": 32,
-            "temperature": 0,
-        }
-        resp = httpx.post(url, json=payload, headers=headers, timeout=20)
-        resp.raise_for_status()
-        from backend.app.llm.client import llm_message_text
-
-        return clip_title(llm_message_text(resp.json())) or clip_title(message)
+        llm = ChatLlm(load_settings().llm)
+        return clip_title(llm.summarize_title(message, render_prompt("coordinator.title"))) or clip_title(
+            message
+        )
     except Exception:  # noqa: BLE001
         return clip_title(message)
 
@@ -119,12 +103,12 @@ def default_title_fn(message: str) -> str:
 def summarize_title(app: Any, thread_id: str, user_id: str, message: str) -> None:
     with sqlite3.connect(app.state.runtime_db) as conn:
         row = conn.execute(
-            "SELECT title FROM thread WHERE thread_id = ? AND user_id = ?",
+            load_sql("threads.select_thread_title"),
             (thread_id, user_id),
         ).fetchone()
     if row is None:
         return
-    if row[0] not in (None, "", "新会话"):
+    if row[0] not in (None, "", empty_thread_title()):
         return
     fn = getattr(app.state, "title_fn", None) or default_title_fn
     try:
@@ -134,7 +118,7 @@ def summarize_title(app: Any, thread_id: str, user_id: str, message: str) -> Non
     title = clip_title(raw or message)
     with sqlite3.connect(app.state.runtime_db) as conn:
         conn.execute(
-            "UPDATE thread SET title = ? WHERE thread_id = ? AND user_id = ?",
+            load_sql("threads.update_thread_title"),
             (title, thread_id, user_id),
         )
         conn.commit()
@@ -142,14 +126,47 @@ def summarize_title(app: Any, thread_id: str, user_id: str, message: str) -> Non
 
 def coordinator_sse(request: Request, ctx: RuntimeContext, message: str, *, resume: Any = None):
     yield format_sse("status", {"stage": "running"})
-    invoke_fn = request.app.state.invoke_fn
-    try:
-        result = invoke_fn(request.app.state.graph, message, ctx, resume=resume)
-    except Exception as exc:  # noqa: BLE001
-        _LOG.exception("coordinator invoke failed")
-        yield format_sse("error", {"message": public_error(exc)})
+    start = think_steps().get("start")
+    if start:
+        yield format_sse("think", {"node": "start", **start})
+
+    events: queue.SimpleQueue[tuple[str, Any]] = queue.SimpleQueue()
+
+    def on_think(payload: dict[str, str]) -> None:
+        events.put(("think", payload))
+
+    def worker() -> None:
+        try:
+            with think_listener(on_think):
+                result = request.app.state.invoke_fn(
+                    request.app.state.graph, message, ctx, resume=resume
+                )
+            events.put(("ok", result))
+        except Exception as exc:  # noqa: BLE001
+            events.put(("err", exc))
+        finally:
+            events.put(("end", None))
+
+    threading.Thread(target=worker, daemon=True).start()
+    result: dict[str, Any] | None = None
+    error: Exception | None = None
+    while True:
+        kind, payload = events.get()
+        if kind == "think":
+            yield format_sse("think", payload)
+        elif kind == "ok":
+            result = payload
+        elif kind == "err":
+            error = payload
+        else:
+            break
+
+    if error is not None:
+        _LOG.exception("coordinator invoke failed", exc_info=error)
+        yield format_sse("error", {"message": public_error(error)})
         yield format_sse("done", {})
         return
+    assert result is not None
     interrupts = result.get("__interrupt__") or []
     if interrupts:
         first = interrupts[0]
@@ -176,7 +193,7 @@ def sse_response(chunks):
 def create_thread(request: Request, user: CurrentUser, body: ThreadCreate = _EMPTY_THREAD):
     del body
     thread_id = str(uuid.uuid4())
-    title = "新会话"
+    title = empty_thread_title()
     upsert_thread(request.app.state.runtime_db, thread_id, user.user_id, title, request_time(request))
     graph = request.app.state.graph
     if graph is not None and hasattr(graph, "update_state"):
@@ -188,7 +205,7 @@ def create_thread(request: Request, user: CurrentUser, body: ThreadCreate = _EMP
                     "request_time_utc": request_time(request),
                     "timezone": request.app.state.timezone,
                     "role": user.role,
-                    "tenant_id": "default",
+                    "tenant_id": tenant_id(),
                 }
             },
             {"message": ""},
@@ -201,8 +218,7 @@ def list_threads(request: Request, user: CurrentUser):
     with sqlite3.connect(request.app.state.runtime_db) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            """SELECT thread_id, user_id, title, created_at, updated_at
-               FROM thread WHERE user_id = ? ORDER BY updated_at DESC""",
+            load_sql("threads.list_threads"),
             (user.user_id,),
         ).fetchall()
     return {
@@ -222,7 +238,7 @@ def list_threads(request: Request, user: CurrentUser):
 def delete_thread(thread_id: str, request: Request, user: CurrentUser):
     with sqlite3.connect(request.app.state.runtime_db) as conn:
         cur = conn.execute(
-            "DELETE FROM thread WHERE thread_id = ? AND user_id = ?",
+            load_sql("threads.delete_thread"),
             (thread_id, user.user_id),
         )
         conn.commit()

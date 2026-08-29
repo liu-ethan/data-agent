@@ -11,7 +11,9 @@ from backend.app.runtime.permissions import reload_permissions
 from backend.app.types import Intent, RuntimeContext
 
 
-USERS_DDL = Path("migrations/sqlite/users.sql").read_text(encoding="utf-8")
+from scripts.init_sqlite import SQL_DIR
+
+USERS_DDL = (SQL_DIR / "users.sql").read_text(encoding="utf-8")
 
 
 @pytest.fixture
