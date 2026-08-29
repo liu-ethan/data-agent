@@ -50,6 +50,13 @@ class FilterCond(BaseModel):
     value: Any
 
 
+class LocalFilterSpec(BaseModel):
+    filters: list[FilterCond] = []
+    order_by: list[str] = []
+    select: list[str] = []
+    topn: int | None = None
+
+
 class QueryTask(BaseModel):
     task_id: str
     metric_ids: list[str]
