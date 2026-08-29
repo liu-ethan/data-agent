@@ -6,3 +6,5 @@ query_skeleton: |
   不要调用 interrupt，不要写 SQL。
   输出 JSON，字段为：metric_ids, select_dims, from_table, joins, filters,
   time_field, group_by, comparisons, limit。
+  列表用 []，不要用 null；comparisons 只能是小写 yoy、mom、ratio、topn。
+  不要输出 <think> 或思考过程。

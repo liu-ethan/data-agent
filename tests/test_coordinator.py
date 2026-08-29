@@ -260,6 +260,226 @@ def _invoke(graph, message: str, ctx: RuntimeContext, *, resume=None):
     return invoke_coordinator(graph, message, ctx, resume=resume)
 
 
+def test_extract_json_skips_think_block_and_invalid_brackets():
+    from backend.app.llm.client import extract_json
+
+    raw = """<think>
+The user asked GMV. intent is [query] and metric_ids ["gmv"].
+</think>
+{"intent": "query", "metric_ids": ["gmv"], "time_text": "本月"}
+"""
+    assert extract_json(raw) == {
+        "intent": "query",
+        "metric_ids": ["gmv"],
+        "time_text": "本月",
+    }
+
+
+def test_extract_json_reads_fenced_object_after_think():
+    from backend.app.llm.client import extract_json
+
+    raw = """<think>
+I'll write JSON
+</think>
+
+```json
+{"intent": "query"}
+```
+"""
+    assert extract_json(raw) == {"intent": "query"}
+
+
+def test_intent_draft_accepts_uppercase_llm_intent():
+    from backend.app.coordinator.intent import IntentDraft
+
+    draft = IntentDraft.model_validate(
+        {"intent": "QUERY", "metric_ids": ["gmv"], "time_text": "本月"}
+    )
+    assert draft.intent is Intent.QUERY
+    followup = IntentDraft.model_validate({"intent": "FollowUp", "clarify_kind": "METRIC"})
+    assert followup.intent is Intent.FOLLOWUP
+    assert followup.clarify_kind == "metric"
+
+
+def test_intent_draft_coerces_null_lists_from_llm():
+    from backend.app.coordinator.intent import IntentDraft
+
+    draft = IntentDraft.model_validate(
+        {
+            "intent": "query",
+            "metric_ids": ["gmv"],
+            "dimensions": None,
+            "filters": None,
+            "order_by": None,
+            "limit": None,
+            "time_text": "本月",
+            "operation_type": None,
+            "object_ids": None,
+            "params": None,
+            "refer_previous_skus": None,
+        }
+    )
+    assert draft.order_by == []
+    assert draft.dimensions == []
+    assert draft.filters == []
+    assert draft.object_ids == []
+    assert draft.params == {}
+    assert draft.refer_previous_skus is False
+
+
+def test_intent_draft_coerces_empty_list_bool_and_params():
+    from backend.app.coordinator.intent import IntentDraft
+
+    draft = IntentDraft.model_validate(
+        {
+            "intent": "query",
+            "metric_ids": ["gmv"],
+            "refer_previous_skus": [],
+            "params": [],
+        }
+    )
+    assert draft.refer_previous_skus is False
+    assert draft.params == {}
+
+
+def test_intent_draft_accepts_scalar_ids_and_filter_aliases():
+    from backend.app.coordinator.intent import IntentDraft
+
+    draft = IntentDraft.model_validate(
+        {
+            "intent": "query",
+            "metric_ids": "GMV",
+            "dimensions": "category",
+            "object_ids": [1, 2],
+            "filters": {"column": "fact_order.status", "operator": "IN", "value": ["paid"]},
+            "order_by": None,
+            "clarify_kind": [],
+            "clarify_query": [],
+            "operation_type": [],
+        }
+    )
+    assert draft.metric_ids == ["gmv"]
+    assert draft.dimensions == ["category"]
+    assert draft.object_ids == ["1", "2"]
+    assert draft.filters[0].field == "fact_order.status"
+    assert draft.filters[0].op == "in"
+    assert draft.clarify_kind is None
+    assert draft.operation_type is None
+
+
+def test_query_skeleton_accepts_messy_llm_json():
+    from backend.app.llm.schemas import parse_query_skeleton
+
+    skeleton = parse_query_skeleton(
+        {
+            "metric_ids": "gmv",
+            "select_dims": None,
+            "from_table": "fact_order_item",
+            "joins": [{"left": "fact_order_item", "right": "fact_order", "on_left": "order_id", "on_right": "id", "cardinality": "many_to_one"}],
+            "filters": [],
+            "time_field": "fact_order.created_at",
+            "group_by": {},
+            "comparisons": ["YOY", "bogus"],
+            "limit": [],
+        }
+    )
+    assert skeleton.metric_ids == ["gmv"]
+    assert skeleton.select_dims == []
+    assert skeleton.group_by == []
+    assert skeleton.comparisons == ["yoy"]
+    assert skeleton.limit is None
+
+
+def test_query_skeleton_accepts_non_object_json():
+    from backend.app.llm.schemas import parse_query_skeleton
+
+    skeleton = parse_query_skeleton(["gmv"])
+    assert skeleton.metric_ids == []
+    assert skeleton.joins == []
+    assert skeleton.limit is None
+
+
+def test_write_plan_accepts_messy_llm_json():
+    from backend.app.llm.schemas import parse_write_plan
+
+    plan = parse_write_plan(
+        {
+            "operation_type": "update_sku_status",
+            "object_ids": [11, "22"],
+            "params": [],
+            "filters": None,
+        }
+    )
+    assert plan.object_ids == ["11", "22"]
+    assert plan.params == {}
+    assert plan.filters == []
+
+
+def test_ground_answer_strips_think_tags():
+    from backend.app.coordinator.respond import ground_answer
+
+    facts = {"scalars": {"gmv": 100}, "result_id": "r1"}
+    answer = "<think>The user asked GMV</think>\n本月 GMV 为 100"
+    assert "<think>" not in ground_answer(answer, facts)
+    assert "100" in ground_answer(answer, facts)
+
+
+def test_facts_from_summary_includes_decimal_gmv():
+    from decimal import Decimal
+
+    from backend.app.coordinator.respond import facts_from_summary, ground_answer
+
+    summary = ResultSummary(
+        result_id="r-gmv",
+        row_count=1,
+        columns=["gmv"],
+        preview_rows=[{"gmv": Decimal("26560.00")}],
+        units={"gmv": "CNY"},
+        time_range=TIME_RANGE,
+        data_as_of="2026-08-27T21:33:00+00:00",
+        metric_versions={"gmv": 1},
+        schema_version=2,
+    )
+    facts = facts_from_summary(summary)
+    assert facts["scalars"]["gmv"] == 26560
+    assert "preview_rows" not in facts
+    assert ground_answer("本月 GMV 为 26560.00 元", facts) == "本月 GMV 为 26560.00 元"
+
+
+def test_intent_draft_coerces_empty_limit_to_none():
+    from backend.app.coordinator.intent import IntentDraft
+
+    draft = IntentDraft.model_validate({"intent": "query", "metric_ids": ["gmv"], "limit": []})
+    assert draft.limit is None
+
+
+def test_intent_draft_maps_time_range_preset_to_time_text():
+    from backend.app.coordinator.intent import IntentDraft
+
+    draft = IntentDraft.model_validate(
+        {
+            "intent": "query",
+            "metric_ids": ["gmv"],
+            "time_range": {"preset": "this_month"},
+        }
+    )
+    assert draft.time_text == "本月"
+
+
+def test_query_with_non_write_operation_type_stays_query():
+    from backend.app.coordinator.intent import IntentDraft, normalize_intent
+
+    draft = IntentDraft.model_validate(
+        {
+            "intent": "query",
+            "metric_ids": ["gmv"],
+            "dimensions": ["category"],
+            "operation_type": "compare",
+        }
+    )
+    assert normalize_intent(draft) is Intent.QUERY
+
+
 def test_ambiguous_product_interrupt_has_stable_ids(tmp_path, store):
     from backend.app.coordinator.intent import IntentDraft
 
@@ -583,3 +803,28 @@ def test_lookup_metrics_filters_by_permission():
     allowed = lookup_metrics("退款", _catalog(), ctx.permissions)
     assert allowed
     assert {h["id"] for h in allowed} == {"refund_rate"}
+
+
+def test_lookup_metrics_matches_id_inside_user_sentence():
+    from backend.app.coordinator.candidates import lookup_metrics
+
+    hits = lookup_metrics("本月 GMV 是多少？", _catalog(), _ctx().permissions)
+    assert {h["id"] for h in hits} == {"gmv"}
+
+
+def test_metric_clarify_without_query_still_lists_gmv(tmp_path, store):
+    from backend.app.coordinator.intent import IntentDraft
+
+    ctx = _ctx()
+    llm = FakeCoordinatorLlm(
+        {
+            "本月 GMV 是多少？": IntentDraft(
+                intent=Intent.CLARIFY,
+                clarify_kind="metric",
+            )
+        }
+    )
+    graph = _graph(tmp_path, store, llm, ctx, FollowupAwareQuerySkill(store))
+    payload = _interrupt_payload(_invoke(graph, "本月 GMV 是多少？", ctx))
+    assert payload["kind"] == "clarify"
+    assert any(item["id"] == "gmv" for item in payload["candidates"])

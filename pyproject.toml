@@ -23,6 +23,7 @@ dependencies = [
     "pyarrow",
     "rank-bm25",
     "httpx",
+    "PyJWT",
     "pytest",
     "ruff",
 ]

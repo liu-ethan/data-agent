@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from itertools import pairwise
 from pathlib import Path
@@ -291,13 +292,16 @@ def _make_gap(
 ) -> SchemaGap:
     concept = ", ".join(missing) if missing else "schema coverage"
     if llm is not None:
-        return llm.schema_gap(
-            missing_concept=concept,
-            purpose="query_coverage",
-            constraints=list(missing),
-            excluded=excluded,
-            prompt=prompts["schema_gap"],
-        )
+        try:
+            return llm.schema_gap(
+                missing_concept=concept,
+                purpose="query_coverage",
+                constraints=list(missing),
+                excluded=excluded,
+                prompt=prompts["schema_gap"],
+            )
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
     return SchemaGap(
         missing_concept=concept,
         purpose="query_coverage",
@@ -334,12 +338,19 @@ def retrieve_schema(
         vector.ensure_index(catalog, embeddings_db=embeddings_db, embedder=embedder)
 
     if llm is not None:
-        queries = llm.table_queries(task, prompts["table_queries"])
+        try:
+            queries = llm.table_queries(task, prompts["table_queries"])
+        except (json.JSONDecodeError, ValueError, TypeError):
+            queries = []
     else:
         queries = _default_table_queries(task, metrics)
     if not queries:
         queries = _default_table_queries(task, metrics)
 
+    required_fields = _required_fields(task, metrics)
+    required_tables = _required_tables(metrics, required_fields)
+    catalog_tables = {t.table_name for t in catalog.tables}
+    required_tables &= catalog_tables
     candidates = set(
         _hybrid_tables(
             queries,
@@ -349,10 +360,7 @@ def retrieve_schema(
             embeddings_db=embeddings_db,
         )
     )
-    required_fields = _required_fields(task, metrics)
-    required_tables = _required_tables(metrics, required_fields)
-    catalog_tables = {t.table_name for t in catalog.tables}
-    required_tables &= catalog_tables
+    candidates |= required_tables
     grain = metrics[0].grain_table if metrics else (min(required_tables) if required_tables else "")
 
     for round_i in range(max_gap_rounds + 1):

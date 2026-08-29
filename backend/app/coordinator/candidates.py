@@ -20,15 +20,15 @@ def lookup_metrics(
     permissions: PermissionSet,
 ) -> list[Candidate]:
     needle = (query or "").strip().lower()
-    if not needle:
-        return []
     allowed = set(permissions.allowed_metrics)
     hits: list[Candidate] = []
     for metric in catalog.metrics:
         if metric.metric_id not in allowed:
             continue
-        blob = f"{metric.metric_id} {metric.name}".lower()
-        if needle in blob:
+        mid = metric.metric_id.lower()
+        name = (metric.name or "").lower()
+        blob = f"{mid} {name}"
+        if not needle or needle in blob or mid in needle or (name and name in needle):
             hits.append({"id": metric.metric_id, "label": metric.name, "kind": "metric"})
     return hits
 

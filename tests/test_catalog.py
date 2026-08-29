@@ -40,6 +40,69 @@ def test_relation_graph_has_no_llm_guessed_edges(catalog_db: Path):
     assert "llm" not in {rel.source for rel in snapshot.relations}
 
 
+def test_ensure_physical_schema_syncs_when_columns_empty(catalog_db: Path, monkeypatch):
+    from backend.app.catalog.sync import apply_information_schema, ensure_physical_schema
+
+    called: list[Path] = []
+
+    def fake_sync(*, catalog_db, engine=None):
+        called.append(Path(catalog_db))
+        return apply_information_schema(
+            catalog_db,
+            tables=[{"table_name": "dim_sku", "comment": "SKU"}],
+            columns=[
+                {
+                    "table_name": "dim_sku",
+                    "column_name": "sku_name",
+                    "data_type": "varchar",
+                    "comment": "SKU 商品名",
+                }
+            ],
+            foreign_keys=[
+                {
+                    "left_table": "dim_sku",
+                    "left_col": "category_id",
+                    "right_table": "dim_category",
+                    "right_col": "id",
+                }
+            ],
+            mysql_database="data-agent-ecommerce",
+        )
+
+    monkeypatch.setattr("backend.app.catalog.sync.sync_from_mysql", fake_sync)
+    version = ensure_physical_schema(catalog_db=catalog_db)
+    assert called == [catalog_db]
+    snap = CatalogStore(catalog_db).load()
+    assert version == snap.catalog_version
+    assert ("dim_sku", "sku_name") in {(c.table_name, c.column_name) for c in snap.columns}
+
+
+def test_ensure_physical_schema_skips_when_columns_exist(catalog_db: Path, monkeypatch):
+    from backend.app.catalog.sync import apply_information_schema, ensure_physical_schema
+
+    apply_information_schema(
+        catalog_db,
+        tables=[{"table_name": "dim_sku", "comment": "SKU"}],
+        columns=[
+            {
+                "table_name": "dim_sku",
+                "column_name": "sku_name",
+                "data_type": "varchar",
+                "comment": "SKU 商品名",
+            }
+        ],
+        foreign_keys=[],
+        mysql_database="data-agent-ecommerce",
+    )
+    monkeypatch.setattr(
+        "backend.app.catalog.sync.sync_from_mysql",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not sync")),
+    )
+    version = ensure_physical_schema(catalog_db=catalog_db)
+    assert version == CatalogStore(catalog_db).load().catalog_version
+    assert CatalogStore(catalog_db).load().columns
+
+
 def test_physical_sync_preserves_metrics_and_write_ops_and_bumps_version(catalog_db: Path):
     store = CatalogStore(catalog_db)
     gmv_before = store.get_metric("gmv").formula

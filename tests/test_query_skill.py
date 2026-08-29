@@ -385,6 +385,36 @@ def test_fake_llm_skeleton_sql_has_audited_formula_and_params(store):
     assert result.result.preview_rows is None or len(result.result.preview_rows) <= 20
 
 
+def test_empty_llm_skeleton_still_compiles_task_metrics(store):
+    from backend.app.mysql.execute_read import execute_read
+    from tests.test_execute_read import ScriptedEngine
+
+    ctx = _ctx()
+    llm = FakeQueryLlm(
+        _skeleton(
+            metric_ids=[],
+            select_dims=[],
+            from_table="",
+            joins=[],
+            time_field="",
+            group_by=[],
+            limit=0,
+        )
+    )
+    engine = ScriptedEngine(select_rows=[{"gmv": 26560}])
+    spy = ExecuteSpy(inner=lambda query, ctx, **kw: execute_read(query, ctx, **kw))
+    result = _run(_task(), ctx, store, llm, execute_read_fn=spy, engine=engine)
+
+    assert result.ok is True
+    assert spy.calls
+    sql = spy.calls[0].sql.replace("\n", " ")
+    params = spy.calls[0].params
+    assert "SUM(oi.price * oi.qty)" in sql
+    assert "JOIN fact_order" in sql
+    assert "limit" not in params
+    assert params.get("limit") != 0
+
+
 def test_gateway_reject_does_not_execute_mysql(store):
     ctx = _ctx(extra_tables=["dim_user"], extra_columns=["dim_user.nick_name"])
     catalog = _catalog(sensitive_nick=True)

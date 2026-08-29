@@ -6,9 +6,11 @@ import inspect
 import io
 import json
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 
@@ -152,6 +154,9 @@ def env(tmp_path: Path):
         max_rows=3,
         timezone="Asia/Shanghai",
         request_time_utc=NOW,
+        jwt_secret="t15-test-secret-t15-test-secret!",
+        jwt_ttl_hours=24,
+        title_fn=lambda message: "超长标题用来验证截断到十个字以上",
     )
     client = TestClient(app)
     return SimpleNamespace(
@@ -205,7 +210,7 @@ def test_create_and_list_threads_writes_runtime_not_task_tables(env):
     assert listed.status_code == 200
     rows = listed.json()["threads"]
     assert rows[0]["thread_id"] == thread_id
-    assert rows[0]["title"] == "问数"
+    assert rows[0]["title"] == "新会话"
 
     other = _login(env.client, "analyst")
     assert env.client.get("/api/threads", headers=other).json()["threads"] == []
@@ -240,6 +245,27 @@ def test_messages_sse_emits_status_result_token_and_done(env):
     assert "GMV" in payload["token"]["text"]
     assert env.coordinator.calls[-1]["resume"] is None
     assert env.coordinator.calls[-1]["message"] == "本月GMV"
+
+
+def test_messages_sse_hides_parse_errors(env):
+    def boom(*args, **kwargs):
+        raise ValueError(
+            "2 validation errors for IntentDraft\nrefer_previous_skus\n  Input should be a valid boolean"
+        )
+
+    env.app.state.invoke_fn = boom
+    headers = _login(env.client)
+    thread_id = env.client.post("/api/threads", headers=headers).json()["thread_id"]
+    events = _sse_events(
+        env.client.post(
+            f"/api/threads/{thread_id}/messages",
+            json={"message": "本月GMV"},
+            headers=headers,
+        ).text
+    )
+    payload = dict(events)
+    assert payload["error"]["message"] == "模型输出无法解析，请再试一次。"
+    assert "validation error" not in payload["error"]["message"].lower()
 
 
 def test_messages_sse_emits_interrupt(env):
@@ -409,3 +435,177 @@ def test_csv_rejects_expired_result(env, tmp_path):
     env.app.state.request_time_utc = "2026-08-30T02:00:00+00:00"
     assert env.client.get(f"/api/results/{rid}.csv", headers=headers).status_code == 410
     assert env.client.get(f"/api/results/{rid}", headers=headers).status_code == 410
+
+
+def test_login_token_is_jwt_with_24h_exp(env):
+    res = env.client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+    body = res.json()
+    payload = jwt.decode(body["token"], options={"verify_signature": False})
+    assert res.status_code == 200
+    assert payload["sub"] == "u-admin"
+    assert payload["role"] == "operator"
+    assert payload["exp"] - payload["iat"] == 24 * 3600
+    assert "permissions" not in payload
+    assert body["role"] == "operator"
+
+
+def test_me_works_on_fresh_app_without_session_dict(env, tmp_path):
+    token = env.client.post(
+        "/api/auth/login", json={"username": "admin", "password": "admin"}
+    ).json()["token"]
+    from backend.app.main import create_app
+
+    store = ResultStore(
+        results_db=tmp_path / "fresh-results.sqlite",
+        results_dir=tmp_path / "fresh-results",
+        ttl_hours=24,
+        max_rows=3,
+        max_bytes=64 * 1024,
+    )
+    apply_sql(tmp_path / "fresh-results.sqlite", SQL_DIR / "results.sql")
+    fresh = create_app(
+        users_db=env.users_db,
+        runtime_db=env.runtime_db,
+        result_store=store,
+        graph=FakeGraph(),
+        invoke_fn=FakeCoordinator(),
+        max_rows=3,
+        timezone="Asia/Shanghai",
+        request_time_utc=NOW,
+        jwt_secret="t15-test-secret-t15-test-secret!",
+        jwt_ttl_hours=24,
+    )
+    fresh.state.sessions = {}
+    client = TestClient(fresh)
+    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.status_code == 200
+    body = me.json()
+    assert body["user_id"] == "u-admin"
+    assert body["role"] == "operator"
+    assert "token" not in body
+
+
+def test_expired_jwt_is_401(env):
+    now = datetime.now(UTC)
+    token = jwt.encode(
+        {
+            "sub": "u-admin",
+            "username": "admin",
+            "role": "operator",
+            "iat": int((now - timedelta(hours=25)).timestamp()),
+            "exp": int((now - timedelta(hours=1)).timestamp()),
+        },
+        "t15-test-secret-t15-test-secret!",
+        algorithm="HS256",
+    )
+    res = env.client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 401
+
+
+def test_analyst_login_jwt_role(env):
+    res = env.client.post("/api/auth/login", json={"username": "analyst", "password": "analyst"})
+    payload = jwt.decode(res.json()["token"], options={"verify_signature": False})
+    assert res.status_code == 200
+    assert payload["role"] == "analyst"
+    assert res.json()["role"] == "analyst"
+
+
+def test_register_writes_users_sqlite_not_admin_role(env):
+    res = env.client.post(
+        "/api/auth/register",
+        json={"username": "ops2", "password": "secret1", "role": "operator"},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["token"]
+    assert body["role"] == "operator"
+    payload = jwt.decode(body["token"], options={"verify_signature": False})
+    assert payload["role"] == "operator"
+    with sqlite3.connect(env.users_db) as conn:
+        row = conn.execute(
+            "SELECT username, role FROM app_user WHERE username = ?",
+            ("ops2",),
+        ).fetchone()
+        perms = conn.execute(
+            """SELECT allowed_write_ops_json FROM user_permission
+               WHERE user_id = (SELECT user_id FROM app_user WHERE username = ?)""",
+            ("ops2",),
+        ).fetchone()
+    assert row == ("ops2", "operator")
+    assert row[1] != "admin"
+    assert "update_sku_status" in json.loads(perms[0])
+
+
+def test_register_rejects_admin_role(env):
+    res = env.client.post(
+        "/api/auth/register",
+        json={"username": "bad", "password": "secret1", "role": "admin"},
+    )
+    assert res.status_code == 422
+
+
+def test_register_duplicate_username_is_409(env):
+    res = env.client.post(
+        "/api/auth/register",
+        json={"username": "admin", "password": "secret1", "role": "analyst"},
+    )
+    assert res.status_code == 409
+
+
+def test_delete_thread_owner_only(env):
+    headers = _login(env.client)
+    thread_id = env.client.post("/api/threads", headers=headers).json()["thread_id"]
+    other = _login(env.client, "analyst")
+    assert env.client.delete(f"/api/threads/{thread_id}", headers=other).status_code == 404
+    deleted = env.client.delete(f"/api/threads/{thread_id}", headers=headers)
+    assert deleted.status_code == 204
+    with sqlite3.connect(env.runtime_db) as conn:
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM thread WHERE thread_id = ?", (thread_id,)
+        ).fetchone()[0]
+        tasks = conn.execute("SELECT COUNT(*) FROM task").fetchone()[0]
+        hitl = conn.execute("SELECT COUNT(*) FROM hitl_interrupt").fetchone()[0]
+    assert remaining == 0
+    assert tasks == 0
+    assert hitl == 0
+    assert env.client.get("/api/threads", headers=headers).json()["threads"] == []
+
+
+def test_clip_title_strips_minimax_think_block():
+    from backend.app.api.chat import clip_title
+
+    raw = "<think>\nThe user asks about GMV\n</think>\n本月GMV"
+    title = clip_title(raw)
+    assert title == "本月GMV"
+    assert not title.startswith("think")
+
+
+def test_title_fn_truncated_and_message_does_not_become_title(env):
+    from backend.app.coordinator.graph import upsert_thread
+
+    headers = _login(env.client)
+    thread_id = env.client.post("/api/threads", headers=headers).json()["thread_id"]
+    raw = "本月GMV是多少请问一下详细的品类拆分情况"
+    env.client.post(
+        f"/api/threads/{thread_id}/messages",
+        json={"message": raw},
+        headers=headers,
+    )
+    upsert_thread(env.runtime_db, thread_id, "u-admin", raw, NOW)
+    with sqlite3.connect(env.runtime_db) as conn:
+        title = conn.execute(
+            "SELECT title FROM thread WHERE thread_id = ?", (thread_id,)
+        ).fetchone()[0]
+    assert title != raw
+    assert title != "新会话"
+    assert len(title) <= 10
+    src = Path("backend/app/coordinator/graph.py").read_text(encoding="utf-8")
+    assert 'title = (state.get("message") or "")[:40]' not in src
+
+
+def test_create_app_from_config_compiles_coordinator_graph():
+    from backend.app.main import create_app
+
+    app = create_app()
+    assert app.state.graph is not None
+    assert hasattr(app.state.graph, "invoke")

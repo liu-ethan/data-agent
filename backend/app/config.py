@@ -96,6 +96,8 @@ class AuthUser(BaseModel):
 class AuthSettings(BaseModel):
     mode: Literal["local_password", "off"] = "local_password"
     users: list[AuthUser] = Field(default_factory=list)
+    jwt_secret: str = "change-me-change-me-change-me-32b"
+    jwt_ttl_hours: int = 24
 
 
 class WriteOp(BaseModel):

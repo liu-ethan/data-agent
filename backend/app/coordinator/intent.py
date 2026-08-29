@@ -5,12 +5,23 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from backend.app.llm.schemas import sanitize_intent
 from backend.app.runtime.time import resolve_time_range
+from backend.app.skills.write.registry import ALLOWED_OPERATION_TYPES
 from backend.app.types import FilterCond, Intent, QueryTask, RuntimeContext, WriteTask
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompt" / "coordinator.yaml"
+_EMPTY_TEXT = frozenset({"", "none", "null", "n/a", "nil", "-"})
+_TIME_PRESETS = {
+    "this_month": "本月",
+    "this month": "本月",
+    "today": "今天",
+    "yesterday": "昨天",
+    "last_7_days": "近7天",
+    "last7days": "近7天",
+}
 
 
 class IntentDraft(BaseModel):
@@ -28,6 +39,56 @@ class IntentDraft(BaseModel):
     clarify_kind: Literal["metric", "product", "time"] | None = None
     clarify_query: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_llm_payload(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        data = sanitize_intent(dict(value))
+        if not data.get("time_text"):
+            extra = data.get("time_range")
+            preset = None
+            if isinstance(extra, str) and extra.strip():
+                preset = extra.strip()
+            elif isinstance(extra, dict):
+                preset = extra.get("preset") or extra.get("label") or extra.get("text")
+            if preset:
+                key = str(preset).strip()
+                data["time_text"] = _TIME_PRESETS.get(key.lower(), key)
+        return data
+
+    @field_validator("intent", mode="before")
+    @classmethod
+    def coerce_intent(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator("clarify_kind", mode="before")
+    @classmethod
+    def coerce_clarify_kind(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator("time_text", mode="before")
+    @classmethod
+    def coerce_time_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return _TIME_PRESETS.get(stripped.lower(), stripped) or None
+        return value
+
+    @field_validator("operation_type", mode="before")
+    @classmethod
+    def coerce_operation_type(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        if stripped.lower() in _EMPTY_TEXT:
+            return None
+        return stripped
+
 
 def load_coordinator_prompt() -> str:
     data = yaml.safe_load(_PROMPT_PATH.read_text(encoding="utf-8"))
@@ -37,7 +98,7 @@ def load_coordinator_prompt() -> str:
 
 
 def normalize_intent(draft: IntentDraft) -> Intent:
-    writeish = bool(draft.operation_type)
+    writeish = draft.operation_type in ALLOWED_OPERATION_TYPES
     queryish = bool(draft.metric_ids) or draft.intent in (Intent.QUERY, Intent.FOLLOWUP)
     if writeish and queryish:
         return Intent.UNSUPPORTED

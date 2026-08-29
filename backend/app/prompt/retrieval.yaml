@@ -4,6 +4,7 @@ table_queries: |
   只描述需要哪些业务表或实体（名称、别名、缩写、用途），不要发明 JOIN，
   不要写 SQL，不要编指标公式，不要添加关系边。
   输出 JSON：{"table_queries": ["...", "..."]}
+  不要输出 <think> 或思考过程，列表用 []。
 
 schema_gap: |
   根据覆盖检查中缺失的概念，整理为 SchemaGap 补检问题。
@@ -11,3 +12,4 @@ schema_gap: |
   excluded（已排除或已召回的候选，避免重复）。
   不要添加关系边，不要猜测未审核 JOIN，不要调用 interrupt。
   输出 JSON：{"missing_concept": "...", "purpose": "...", "constraints": [], "excluded": []}
+  不要输出 <think> 或思考过程。

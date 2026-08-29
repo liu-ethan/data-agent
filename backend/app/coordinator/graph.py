@@ -79,9 +79,8 @@ def upsert_thread(
                VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(thread_id) DO UPDATE SET
                  user_id = excluded.user_id,
-                 title = COALESCE(excluded.title, thread.title),
                  updated_at = excluded.updated_at""",
-            (thread_id, user_id, title, now, now),
+            (thread_id, user_id, title or "新会话", now, now),
         )
         conn.commit()
 
@@ -171,9 +170,8 @@ def build_coordinator_graph(
 
     def start_node(state: CoordinatorState, config: RunnableConfig) -> dict[str, Any]:
         ctx = make_ctx(config)
-        title = (state.get("message") or "")[:40]
         if runtime_db is not None:
-            upsert_thread(runtime_db, ctx.thread_id, ctx.user_id, title, _now_iso())
+            upsert_thread(runtime_db, ctx.thread_id, ctx.user_id, "新会话", _now_iso())
         parent = state.get("parent_query_task")
         prev = state.get("query_task")
         if prev is not None and state.get("result_id"):
@@ -213,6 +211,7 @@ def build_coordinator_graph(
                 products_fn=products_fn,
                 metrics_fn=metrics_fn,
                 time_fn=time_fn,
+                user_message=state.get("message") or "",
             )
             return updates
         if intent in (Intent.QUERY, Intent.FOLLOWUP):
@@ -431,8 +430,9 @@ def _clarify_hitl(
     products_fn: LookupFn | None,
     metrics_fn: LookupFn | None,
     time_fn: LookupFn | None,
+    user_message: str = "",
 ) -> dict[str, Any]:
-    query = draft.clarify_query or ""
+    query = draft.clarify_query or user_message
     if draft.clarify_kind == "metric":
         fn = metrics_fn or (lambda q, perms, **k: lookup_metrics(q, catalog, perms))
         candidates = fn(query, ctx.permissions)

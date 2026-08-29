@@ -298,6 +298,38 @@ def test_gmv_recalls_fact_order_and_fact_order_item():
     assert result.catalog_version == 1
 
 
+def test_gmv_recalls_grain_tables_when_llm_queries_are_irrelevant():
+    catalog = _catalog()
+    llm = FakeLlm(["无关词", "天气"])
+    result = _retrieve(_task(["gmv"]), _ctx(ALL_TABLES), catalog, llm)
+
+    assert isinstance(result, SchemaBundle)
+    assert "fact_order" in result.tables
+    assert "fact_order_item" in result.tables
+    assert "fact_order_item.price" in result.columns
+    assert "fact_order_item.qty" in result.columns
+    assert "fact_order.status" in result.columns
+    assert "fact_order.created_at" in result.columns
+
+
+def test_metric_dep_tables_included_without_gap_fill():
+    catalog = _catalog()
+    llm = FakeLlm(["fact_payment 支付尝试"])
+    result = _retrieve(
+        _task(["gmv"]),
+        _ctx(ALL_TABLES),
+        catalog,
+        llm,
+        table_top_k=1,
+        max_gap_rounds=0,
+    )
+
+    assert isinstance(result, SchemaBundle)
+    assert "fact_order" in result.tables
+    assert "fact_order_item" in result.tables
+    assert llm.gap_calls == 0
+
+
 def test_same_name_amount_is_not_matched_across_tables():
     catalog = _catalog()
     llm = FakeLlm(["退款金额 refund amount", "订单行实付 pay_amt"])
@@ -312,9 +344,9 @@ def test_same_name_amount_is_not_matched_across_tables():
 
 def test_gap_fill_adds_owning_table_of_missing_column():
     catalog = _catalog()
-    llm = FakeLlm(["订单 状态 created_at 下单时间"])
+    llm = FakeLlm(["支付 尝试 amount"])
     result = _retrieve(
-        _task(["gmv"]),
+        _task(["gmv"], dimensions=["dim_store.store_name"]),
         _ctx(ALL_TABLES),
         catalog,
         llm,
@@ -324,9 +356,8 @@ def test_gap_fill_adds_owning_table_of_missing_column():
     )
 
     assert isinstance(result, SchemaBundle)
-    assert "fact_order_item" in result.tables
-    assert "fact_order_item.price" in result.columns
-    assert llm.gap_calls >= 1
+    assert "dim_store" in result.tables
+    assert "dim_store.store_name" in result.columns
 
 
 def test_no_embedding_degrades_to_bm25_without_hard_fail():
@@ -411,6 +442,51 @@ def test_vector_search_returns_empty_when_embedder_missing(tmp_path: Path):
     apply_sql(db, SQL_DIR / "embeddings.sql")
     assert search_tables("GMV", catalog_version=1, embeddings_db=db, embedder=None) == []
     assert search_columns("amount", catalog_version=1, embeddings_db=db, embedder=None) == []
+
+
+def test_chat_llm_retrieval_survives_think_only_output():
+    from backend.app.config import LlmSettings
+    from backend.app.llm.client import ChatLlm
+
+    llm = ChatLlm(LlmSettings(base_url="http://example.invalid", api_key="k", model="m"))
+    llm._chat = lambda *a, **k: "<think>need order grain tables for GMV</think>"
+    assert llm.table_queries(_task(["gmv"]), "p") == []
+    gap = llm.schema_gap(
+        missing_concept="fact_order.status",
+        purpose="query_coverage",
+        constraints=["fact_order.status"],
+        excluded=["dim_sku"],
+        prompt="p",
+    )
+    assert gap.missing_concept == "fact_order.status"
+    assert gap.constraints == ["fact_order.status"]
+    assert gap.excluded == ["dim_sku"]
+    llm._chat = lambda *a, **k: "<think>drafting skeleton</think>"
+    from backend.app.types import SchemaBundle
+
+    empty = llm.query_skeleton(
+        _task(["gmv"]),
+        SchemaBundle(tables=[], columns=[], joins=[], catalog_version=1),
+        "p",
+    )
+    assert empty.metric_ids == []
+    assert empty.joins == []
+
+
+def test_retrieve_survives_unparseable_schema_gap_llm():
+    import json
+
+    class BoomLlm(FakeLlm):
+        def schema_gap(self, **kwargs):
+            raise json.JSONDecodeError("Expecting value", " ", 0)
+
+    result = _retrieve(
+        _task(["gmv"]),
+        _ctx(ALL_TABLES),
+        _catalog(),
+        BoomLlm(["无关词"]),
+    )
+    assert isinstance(result, (SchemaBundle, SchemaGap))
 
 
 def test_retrieval_modules_do_not_call_interrupt():

@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+import httpx
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from backend.app.api.auth import CurrentUser
 from backend.app.coordinator.graph import upsert_thread
@@ -16,6 +18,8 @@ from backend.app.runtime.context import build_runtime_context
 from backend.app.types import RuntimeContext
 
 router = APIRouter()
+_LOG = logging.getLogger(__name__)
+_PUNCT = set("「」『』，。！？、.,!?;:：·—()[]{}<>《》'\"")
 
 
 class ThreadCreate(BaseModel):
@@ -31,6 +35,16 @@ class MessageCreate(BaseModel):
 
 def format_sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def public_error(exc: BaseException) -> str:
+    text = str(exc)
+    if isinstance(exc, (ValidationError, json.JSONDecodeError)):
+        return "模型输出无法解析，请再试一次。"
+    lowered = text.lower()
+    if "validation error" in lowered or "expecting value" in lowered:
+        return "模型输出无法解析，请再试一次。"
+    return text or "无法完成该请求。"
 
 
 def request_time(request: Request) -> str:
@@ -61,13 +75,79 @@ def build_ctx(request: Request, user_id: str, thread_id: str) -> RuntimeContext:
     )
 
 
+def clip_title(text: str) -> str:
+    from backend.app.llm.client import strip_reasoning
+
+    cleaned = "".join(ch for ch in strip_reasoning(text) if ch not in _PUNCT)
+    cleaned = "".join(cleaned.split())
+    return cleaned[:10] or "新会话"
+
+
+def default_title_fn(message: str) -> str:
+    try:
+        from backend.app.config import load_settings
+
+        settings = load_settings()
+        url = settings.llm.base_url.rstrip("/") + "/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {settings.llm.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": settings.llm.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "用不超过10个字概括下面这个问题，不要标点、不要引号，只输出标题：\n"
+                        + message
+                    ),
+                }
+            ],
+            "max_tokens": 32,
+            "temperature": 0,
+        }
+        resp = httpx.post(url, json=payload, headers=headers, timeout=20)
+        resp.raise_for_status()
+        from backend.app.llm.client import llm_message_text
+
+        return clip_title(llm_message_text(resp.json())) or clip_title(message)
+    except Exception:  # noqa: BLE001
+        return clip_title(message)
+
+
+def summarize_title(app: Any, thread_id: str, user_id: str, message: str) -> None:
+    with sqlite3.connect(app.state.runtime_db) as conn:
+        row = conn.execute(
+            "SELECT title FROM thread WHERE thread_id = ? AND user_id = ?",
+            (thread_id, user_id),
+        ).fetchone()
+    if row is None:
+        return
+    if row[0] not in (None, "", "新会话"):
+        return
+    fn = getattr(app.state, "title_fn", None) or default_title_fn
+    try:
+        raw = fn(message)
+    except Exception:  # noqa: BLE001
+        raw = message
+    title = clip_title(raw or message)
+    with sqlite3.connect(app.state.runtime_db) as conn:
+        conn.execute(
+            "UPDATE thread SET title = ? WHERE thread_id = ? AND user_id = ?",
+            (title, thread_id, user_id),
+        )
+        conn.commit()
+
+
 def coordinator_sse(request: Request, ctx: RuntimeContext, message: str, *, resume: Any = None):
     yield format_sse("status", {"stage": "running"})
     invoke_fn = request.app.state.invoke_fn
     try:
         result = invoke_fn(request.app.state.graph, message, ctx, resume=resume)
     except Exception as exc:  # noqa: BLE001
-        yield format_sse("error", {"message": str(exc)})
+        _LOG.exception("coordinator invoke failed")
+        yield format_sse("error", {"message": public_error(exc)})
         yield format_sse("done", {})
         return
     interrupts = result.get("__interrupt__") or []
@@ -94,8 +174,9 @@ def sse_response(chunks):
 
 @router.post("/api/threads")
 def create_thread(request: Request, user: CurrentUser, body: ThreadCreate = _EMPTY_THREAD):
+    del body
     thread_id = str(uuid.uuid4())
-    title = body.title or "新会话"
+    title = "新会话"
     upsert_thread(request.app.state.runtime_db, thread_id, user.user_id, title, request_time(request))
     graph = request.app.state.graph
     if graph is not None and hasattr(graph, "update_state"):
@@ -137,8 +218,29 @@ def list_threads(request: Request, user: CurrentUser):
     }
 
 
+@router.delete("/api/threads/{thread_id}", status_code=204)
+def delete_thread(thread_id: str, request: Request, user: CurrentUser):
+    with sqlite3.connect(request.app.state.runtime_db) as conn:
+        cur = conn.execute(
+            "DELETE FROM thread WHERE thread_id = ? AND user_id = ?",
+            (thread_id, user.user_id),
+        )
+        conn.commit()
+        deleted = cur.rowcount
+    if not deleted:
+        raise HTTPException(status_code=404, detail="thread not found")
+    return Response(status_code=204)
+
+
 @router.post("/api/threads/{thread_id}/messages")
-def post_message(thread_id: str, body: MessageCreate, request: Request, user: CurrentUser):
+def post_message(
+    thread_id: str,
+    body: MessageCreate,
+    request: Request,
+    user: CurrentUser,
+    background: BackgroundTasks,
+):
     owned_thread(request, thread_id, user.user_id)
     ctx = build_ctx(request, user.user_id, thread_id)
+    background.add_task(summarize_title, request.app, thread_id, user.user_id, body.message)
     return sse_response(coordinator_sse(request, ctx, body.message))

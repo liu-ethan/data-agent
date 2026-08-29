@@ -104,6 +104,36 @@ def _relations_from_bundle(bundle: SchemaBundle, catalog: CatalogSnapshot) -> li
     return out
 
 
+def _ground_skeleton(
+    task: QueryTask,
+    bundle: SchemaBundle,
+    skeleton: QuerySkeleton,
+    metrics: list[MetricSpec],
+) -> QuerySkeleton:
+    grain = metrics[0].grain_table if metrics else skeleton.from_table
+    time_field = metrics[0].time_field if metrics else skeleton.time_field
+    limit = skeleton.limit if skeleton.limit and skeleton.limit > 0 else task.limit
+    group_by = list(skeleton.group_by)
+    select_dims = list(skeleton.select_dims)
+    if not task.dimensions:
+        group_by = []
+        select_dims = []
+    elif not group_by:
+        group_by = list(task.dimensions)
+        select_dims = select_dims or list(task.dimensions)
+    return skeleton.model_copy(
+        update={
+            "metric_ids": list(task.metric_ids),
+            "joins": list(bundle.joins),
+            "from_table": skeleton.from_table or grain,
+            "time_field": skeleton.time_field or time_field,
+            "group_by": group_by,
+            "select_dims": select_dims,
+            "limit": limit,
+        }
+    )
+
+
 def _is_repairable(decision: GatewayDecision) -> bool:
     if decision.ok or decision.kind == "too_broad":
         return False
@@ -215,13 +245,18 @@ def build_query_graph(
     def q08_skeleton(state: QueryState) -> dict[str, Any]:
         bundle = state["bundle"]
         assert bundle is not None
+        task = state["task"]
         skeleton = llm.query_skeleton(
-            state["task"],
+            task,
             bundle,
             prompt,
             repair_reason=state.get("repair_reason"),
         )
-        return {"skeleton": skeleton, "need_repair": False}
+        metrics = [metric for metric in catalog.metrics if metric.metric_id in task.metric_ids]
+        return {
+            "skeleton": _ground_skeleton(task, bundle, skeleton, metrics),
+            "need_repair": False,
+        }
 
     def q09_compile(state: QueryState) -> dict[str, Any]:
         skeleton = state["skeleton"]

@@ -73,6 +73,8 @@ schema_rag:
 
 auth:
   mode: local_password
+  jwt_secret: change-me-change-me-change-me-32b
+  jwt_ttl_hours: 24
   users:
     - username: admin
       password: admin

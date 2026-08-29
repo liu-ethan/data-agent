@@ -155,3 +155,18 @@ def sync_from_mysql(
         foreign_keys=foreign_keys,
         mysql_database=mysql_database,
     )
+
+
+def ensure_physical_schema(
+    *,
+    catalog_db: str | Path | None = None,
+    engine: Engine | None = None,
+) -> int:
+    """Sync table/column/FK rows from MySQL when Catalog has no columns. No-op otherwise."""
+    from backend.app.catalog.store import CatalogStore
+
+    store = CatalogStore(catalog_db)
+    snap = store.load()
+    if snap.columns:
+        return snap.catalog_version
+    return sync_from_mysql(catalog_db=store.path, engine=engine)
