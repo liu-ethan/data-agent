@@ -20,9 +20,9 @@ export function ChartRenderer({result}: {result: ResultPage}) {
         const x = 4 + index * (barWidth + gap)
         return (
           <g key={index}>
-            <rect x={x} y={height - h} width={barWidth} height={h} rx="4" fill="#3B6CFF" />
+            <rect x={x} y={height - h} width={barWidth} height={h} rx="4" fill="#1A7A68" />
             {label ? (
-              <text x={x + barWidth / 2} y={height + 14} textAnchor="middle" fontSize="9" fill="#8E8E93">
+              <text x={x + barWidth / 2} y={height + 14} textAnchor="middle" fontSize="9" fill="#6A756F">
                 {String(result.rows[index][label] ?? '').slice(0, 6)}
               </text>
             ) : null}

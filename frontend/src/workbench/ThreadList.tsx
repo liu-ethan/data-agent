@@ -1,6 +1,6 @@
 import type {Thread} from '../types'
 
-const DOTS = ['#3B6CFF', '#34C759', '#FF9F0A', '#AF52DE', '#FF375F', '#64D2FF']
+const DOTS = ['#1A7A68', '#B8952A', '#C45C26', '#3D6B8A', '#6B5B8A', '#4A8F6F']
 
 function colorFor(id: string): string {
   let hash = 0

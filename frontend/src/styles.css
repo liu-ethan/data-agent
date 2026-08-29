@@ -1,10 +1,10 @@
 :root {
-  --paper: #ffffff;
-  --mist: #f6f7f8;
-  --ink: #1c1c1e;
-  --mute: #8e8e93;
-  --line: #e8e8ed;
-  --accent: #3b6cff;
+  --paper: #f7f8f5;
+  --mist: #eef1ec;
+  --ink: #1b2420;
+  --mute: #6a756f;
+  --line: #d5dcd6;
+  --accent: #1a7a68;
   font-family: 'Noto Sans SC', 'IBM Plex Sans', system-ui, sans-serif;
   color: var(--ink);
   background: var(--paper);
@@ -35,21 +35,21 @@ textarea:focus-visible {
 }
 
 .auth-stage {
-  --dock: #102a32;
-  --ticket: #e4b34a;
-  --scan: #3dbeae;
-  --receipt: #f6f1e8;
-  --auth-ink: #142226;
-  --auth-mute: #5f7178;
-  --auth-line: #d9d0c4;
+  --dock: #1f2c28;
+  --ticket: #b8952a;
+  --scan: #1a7a68;
+  --receipt: #ffffff;
+  --auth-ink: #1b2420;
+  --auth-mute: #5e6b65;
+  --auth-line: #d0d8d2;
   min-height: 100vh;
   background:
     repeating-linear-gradient(
       90deg,
-      #102a32 0 56px,
-      #122e37 56px 57px
+      #f3f5f1 0 56px,
+      #eaeee8 56px 57px
     );
-  color: #e8efe9;
+  color: var(--auth-ink);
 }
 
 .auth-stage-inner {
@@ -78,8 +78,9 @@ textarea:focus-visible {
 
 .auth-ticker {
   overflow: hidden;
-  border-top: 1px solid rgba(228, 179, 74, 0.35);
-  border-bottom: 1px solid rgba(228, 179, 74, 0.35);
+  border-top: 1px solid rgba(184, 149, 42, 0.45);
+  border-bottom: 1px solid rgba(184, 149, 42, 0.45);
+  background: rgba(255, 255, 255, 0.55);
   padding: 10px 0;
   margin-bottom: 28px;
   mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
@@ -98,7 +99,7 @@ textarea:focus-visible {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 13px;
   letter-spacing: 0.08em;
-  color: #d7e6df;
+  color: var(--auth-ink);
   position: relative;
 }
 
@@ -133,7 +134,7 @@ textarea:focus-visible {
 .auth-pitch .auth-lead {
   margin: 18px 0 28px;
   max-width: 38em;
-  color: #c5d4d0;
+  color: var(--auth-mute);
   font-size: 16px;
   line-height: 1.7;
 }
@@ -167,7 +168,7 @@ textarea:focus-visible {
 }
 
 .auth-capabilities span {
-  color: #9fb0ab;
+  color: var(--auth-mute);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -193,9 +194,9 @@ textarea:focus-visible {
 
 .auth-ask-chip {
   font-size: 13px;
-  color: #d7e6df;
-  border: 1px solid rgba(228, 179, 74, 0.45);
-  background: rgba(16, 42, 50, 0.4);
+  color: var(--auth-ink);
+  border: 1px solid rgba(184, 149, 42, 0.55);
+  background: #fff;
   padding: 8px 12px;
   border-radius: 2px;
 }
@@ -205,9 +206,11 @@ textarea:focus-visible {
   padding: 36px 32px;
   background: var(--receipt);
   color: var(--auth-ink);
-  border: 0;
+  border: 1px solid var(--auth-line);
   border-radius: 4px 18px 18px 4px;
-  box-shadow: inset 8px 0 0 var(--ticket);
+  box-shadow:
+    inset 8px 0 0 var(--ticket),
+    0 18px 40px rgba(31, 44, 40, 0.08);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -240,7 +243,7 @@ textarea:focus-visible {
 .role-pill {
   display: flex;
   padding: 4px;
-  background: #ece4d6;
+  background: var(--mist);
   border-radius: 999px;
   width: fit-content;
   gap: 0;
@@ -258,7 +261,7 @@ textarea:focus-visible {
 
 .auth-tabs button.active,
 .role-pill button.active {
-  background: var(--receipt);
+  background: #fff;
   color: var(--auth-ink);
   box-shadow: 0 1px 0 var(--auth-line);
 }
@@ -274,7 +277,7 @@ textarea:focus-visible {
   border: 1px solid var(--auth-line);
   border-radius: 12px;
   padding: 10px 12px;
-  background: #fffdf8;
+  background: #f7f8f5;
   color: var(--auth-ink);
 }
 
@@ -294,7 +297,7 @@ textarea:focus-visible {
 }
 
 .auth-submit:hover {
-  background: #1b3d46;
+  background: #2a3c36;
 }
 
 @keyframes auth-ticker {
@@ -404,7 +407,7 @@ textarea:focus-visible {
 }
 
 .thread-list li.current {
-  background: #e8eeff;
+  background: #e3eee9;
 }
 
 .thread-open {

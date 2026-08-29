@@ -123,6 +123,7 @@ test('login page introduces the product before credentials', async ({page}) => {
   await expect(page.getByText('改得有人点头')).toBeVisible()
   await expect(page.getByText('进门就能问')).toBeVisible()
   await expect(page.getByRole('tab', {name: '登录'})).toBeVisible()
+  await expect(page.locator('.auth-stage')).toHaveCSS('color', 'rgb(27, 36, 32)')
 })
 
 test('login survives reload instead of returning to the login page', async ({page}) => {
