@@ -286,6 +286,8 @@ def check_read_sql(
         scope = scope_physical_tables(sel, cte)
         for col in scope_columns(sel):
             for table, name in _resolve_column(col, mapping, scope, col_index):
+                if table in cte:
+                    continue
                 spec = col_index.get((table, name))
                 if spec is None:
                     return _unsafe("column is not in the task allowlist")
@@ -318,14 +320,17 @@ def check_read_sql(
                     return _unsafe("fan-out join would double-count the metric grain")
 
     root = tree
-    detail = not has_aggregation(root)
+    detail = not any(has_aggregation(sel) for sel in selects)
     has_time = False
-    mapping = alias_map(root)
-    scope = scope_physical_tables(root, cte)
-    for col in where_columns(root):
-        for table, name in _resolve_column(col, mapping, scope, col_index):
-            if _is_time_column(table, name, col_index, catalog):
-                has_time = True
+    for sel in selects:
+        mapping = alias_map(sel)
+        scope = scope_physical_tables(sel, cte)
+        for col in where_columns(sel):
+            for table, name in _resolve_column(col, mapping, scope, col_index):
+                if table in cte:
+                    continue
+                if _is_time_column(table, name, col_index, catalog):
+                    has_time = True
     limit = limit_value(root, query.params)
     limit_too_broad = limit is None or limit > max_detail_limit
     if detail and not has_time and limit_too_broad:
