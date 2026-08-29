@@ -38,4 +38,4 @@
 
 W07 冲突：不执行，返回 `VERSION_CONFLICT` + 新预览；Coordinator 发新 `operation_id`。旧 ID 尚未插入 MySQL，直接丢弃。
 
-- [ ] **Step 1:** 单测断言写入 Skill 源码/AST 不含 `interrupt`；同一 `operation_id`+`request_hash` 二次 `execute_write` 不重复变更；拒绝路径不写业务表。
+- [x] **Step 1:** 单测断言写入 Skill 源码/AST 不含 `interrupt`；同一 `operation_id`+`request_hash` 二次 `execute_write` 不重复变更；拒绝路径不写业务表。
