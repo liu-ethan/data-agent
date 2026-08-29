@@ -44,4 +44,4 @@ SqliteSaver 按 `thread_id` 持久化。Skill 内部过程不进 Coordinator sta
 
 Checkpoint 只放：当前/上一轮 `QueryTask` 或 `WriteTask`、HITL payload、`result_id`、`operation_id`、`request_hash`。
 
-- [ ] **Step 1:** 假 LLM 测：模糊商品名产生带 ID 的 HITL；「按门店筛一下」意图为 `FOLLOWUP` 且查询 Skill 走 DuckDB；「再加上退款率」意图为 `FOLLOWUP` 且查询 Skill 重查 MySQL；写入预览的 `interrupt` 只出现在 Coordinator；编造候选项的路径不存在；查询/写入 Skill 模块不含 `interrupt(`。
+- [x] **Step 1:** 假 LLM 测：模糊商品名产生带 ID 的 HITL；「按门店筛一下」意图为 `FOLLOWUP` 且查询 Skill 走 DuckDB；「再加上退款率」意图为 `FOLLOWUP` 且查询 Skill 重查 MySQL；写入预览的 `interrupt` 只出现在 Coordinator；编造候选项的路径不存在；查询/写入 Skill 模块不含 `interrupt(`。
